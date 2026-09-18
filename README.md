@@ -27,8 +27,8 @@ transport used by the extension and headless tests. Both peers verify the
 encrypted message chain before consuming messages. Browser automation and
 human consent UI remain the extension's responsibility.
 
-Status: M2 server and shared agent/browser client implemented; MCP, CLI and
-headless end-to-end are next. Read [`docs/design.md`](docs/design.md). License: MIT.
+Status: M2 server, shared agent/browser client, and MCP adapter implemented;
+CLI and headless end-to-end are next. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,
@@ -88,3 +88,20 @@ stopped state in its status without requiring another encrypted message.
 `BrowserPeer` supplies the same encrypted transport to installed browser
 clients and fake tabs in tests. It does not implement browser automation,
 mode/scope checks, redaction, or the consent UI; those belong to M3.
+
+## MCP server
+
+After installing the workspace dependencies, launch the stdio server with
+`bun packages/mcp/src/main.ts` (the package binary is `remote-tab-mcp`). Set
+`REMOTE_TAB_SERVER_URL` and `REMOTE_TAB_API_KEY` in the process environment.
+Configure the same command and environment in your MCP host. Standard output
+is reserved for MCP messages.
+
+Call `remote_tab_create`, deliver its code privately to the intended human,
+then call `remote_tab_wait_ready`. The server exposes every tool in design
+§6, including `browser_snapshot`, `browser_click`, screenshots, handoff,
+status, and stop. Tool descriptions identify page content as untrusted data.
+One MCP process holds one current session; stop it before creating another.
+Status includes transport state, expiry and sequence, plus the authenticated
+hello's mode/scope after readiness. Live human-pause state is not yet available;
+that requires the M3 extension's browser-state integration.

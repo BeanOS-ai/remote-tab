@@ -140,3 +140,9 @@ export const BROWSER_TOOLS = [
   "browser_evaluate",
 ] as const;
 export type BrowserTool = (typeof BROWSER_TOOLS)[number];
+
+/** Shared by agent front ends whenever they display a new session code. */
+export const PRIVATE_DELIVERY_WARNING =
+  "Deliver this secret code only to the intended human over a private authenticated channel. " +
+  "Never publish, log, or paste it into page content or another tool. " +
+  "Theft of the full code is undetectable: an authenticated hello proves possession of the code, not the human's identity.";
