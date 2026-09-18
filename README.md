@@ -16,7 +16,7 @@ Agents use it through an **MCP server** or a **CLI**, both on one client
 library, with the Playwright MCP tool vocabulary so existing coding harnesses
 already know how to drive it.
 
-Status: design phase. Read [`docs/design.md`](docs/design.md).
+Status: design phase. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,

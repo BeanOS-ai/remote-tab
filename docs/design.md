@@ -2,6 +2,7 @@
 
 Status: **draft for review**. Decisions recorded here were made by Gilad on
 2026-09-18; the open questions at the end are the ones still his to make.
+License: MIT (decided 2026-09-18).
 Lineage: BeanOS "tab-share" (monorepo `deployments/beanhome/docs/tab-share.md`,
 extension "Bean Tab Share" 1.1.2, skill `beanos-tab-share`). remote-tab is the
 productised successor; the trust model is inherited, the transport is
@@ -321,7 +322,8 @@ issues platform API keys from its own secret store.
 
 ## 17. Open questions (Gilad)
 
-1. License at open-source time. beanos uses Apache-2.0; same here?
+1. ~~License.~~ **Decided: MIT** (Gilad, 2026-09-18). `LICENSE` is in the repo
+   from the first commit so nothing has to be relicensed at open-source time.
 2. Platform API keys in v1: one static key per platform (simplest), or
    short-lived keys minted by the platform's own broker? Recommendation:
    static per platform for v1, rotate by replacement.
