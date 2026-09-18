@@ -2,6 +2,7 @@ import { parseCode } from "@remote-tab/protocol";
 import { record } from "./chrome";
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const error = element("error");
+let consentTab: { id?: number; url?: string } | undefined;
 async function render() {
   const state = await chrome.runtime.sendMessage({ action: "state" });
   if (!record(state)) return;
@@ -29,6 +30,8 @@ element<HTMLFormElement>("consent").onsubmit = async (event) => {
   try {
     const response = await chrome.runtime.sendMessage({
       action: "share",
+      tabId: consentTab?.id,
+      url: consentTab?.url,
       code,
       mode,
       siteOnly: element<HTMLInputElement>("site").checked,
@@ -46,6 +49,7 @@ element("stop").onclick = async () => {
   await render();
 };
 void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+  consentTab = tab;
   element("tab").textContent = `${tab?.title ?? ""}\n${tab?.url ?? ""}`;
 });
 void render();

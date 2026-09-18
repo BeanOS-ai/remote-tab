@@ -8,6 +8,10 @@ import { SharedSession } from "./session";
 let active: SharedSession | undefined;
 let tabId: number | undefined;
 let starting = false;
+let attempt: { cancelled: boolean } | undefined;
+function cancelStart() {
+  if (attempt) attempt.cancelled = true;
+}
 let driver: TabDriver | undefined;
 function trusted(sender: Sender) {
   return sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("popup.html");
@@ -23,6 +27,8 @@ async function handle(message: unknown) {
     return active?.state ?? { sharing: false };
   }
   if (message.action === "stop") {
+    cancelStart();
+    if (starting && tabId !== undefined) await chrome.debugger.detach({ tabId }).catch(() => {});
     await active?.stop();
     return { ok: true };
   }
@@ -35,11 +41,21 @@ async function handle(message: unknown) {
     typeof message.siteOnly !== "boolean"
   )
     throw new Error("Choose a mode and site scope");
+  if (
+    typeof message.tabId !== "number" ||
+    !Number.isInteger(message.tabId) ||
+    typeof message.url !== "string"
+  )
+    throw new Error("Reopen the popup to choose a tab");
   starting = true;
+  const pending = { cancelled: false };
+  attempt = pending;
   let attached = false;
   let selectedId: number | undefined;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tab = await chrome.tabs.get(message.tabId);
+    if (tab.id !== message.tabId || tab.url !== message.url)
+      throw new Error("The tab changed. Reopen the popup to confirm sharing.");
     if (!tab?.id || !tab.url || !/^https?:\/\//.test(tab.url))
       throw new Error("Choose a normal HTTP or HTTPS tab");
     selectedId = tab.id;
@@ -50,7 +66,10 @@ async function handle(message: unknown) {
     await chrome.debugger.attach(target, "1.3");
     attached = true;
     const newDriver = new TabDriver(
-      (method, params) => chrome.debugger.sendCommand(target, method, params),
+      (method, params) => {
+        if (pending.cancelled) throw new Error("Sharing cancelled");
+        return chrome.debugger.sendCommand(target, method, params);
+      },
       {
         mode,
         scope,
@@ -58,7 +77,10 @@ async function handle(message: unknown) {
         title: tab.title ?? "",
         onNotice: (notice: { code: string; message: string }) => {
           if (active) active.state.notice = notice.message;
-          if (notice.code === "scope_lost") void active?.stop();
+          if (notice.code === "scope_lost") {
+            cancelStart();
+            void active?.stop();
+          }
         },
       },
     );
@@ -67,7 +89,9 @@ async function handle(message: unknown) {
     const current = await chrome.tabs.get(selectedId);
     if (current.url !== tab.url)
       throw new Error("The tab changed while sharing started. Try again.");
+    if (pending.cancelled) throw new Error("Sharing cancelled");
     active = await SharedSession.connect({
+      isCancelled: () => pending.cancelled,
       code: message.code,
       serverUrl: REMOTE_TAB_SERVER_ORIGIN,
       driver: newDriver,
@@ -91,6 +115,7 @@ async function handle(message: unknown) {
     throw error;
   } finally {
     starting = false;
+    if (attempt === pending) attempt = undefined;
   }
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -108,11 +133,20 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 chrome.debugger.onEvent.addListener((target, method, params) => {
   if (target.tabId !== tabId || !driver) return;
-  void driver.onEvent(method, params ?? {}).catch(() => active?.stop());
+  void driver.onEvent(method, params ?? {}).catch(() => {
+    cancelStart();
+    return active?.stop();
+  });
 });
 chrome.debugger.onDetach.addListener((target) => {
-  if (target.tabId === tabId) void active?.stop();
+  if (target.tabId === tabId) {
+    cancelStart();
+    void active?.stop();
+  }
 });
 chrome.tabs.onRemoved.addListener((id) => {
-  if (id === tabId) void active?.stop();
+  if (id === tabId) {
+    cancelStart();
+    void active?.stop();
+  }
 });

@@ -41,6 +41,7 @@ export class SharedSession {
       hello: Hello;
       driver: TabDriver;
       detach: () => Promise<void>;
+      isCancelled?: () => boolean;
     },
   ) {
     if (!parseCode(options.code)) throw new Error("Paste a valid rt1. code from your agent");
@@ -48,6 +49,7 @@ export class SharedSession {
     const share = new SharedSession(peer, options.driver, options.detach, options.hello);
     try {
       share.state.expiresAt = (await peer.status()).expires_at;
+      if (options.isCancelled?.()) throw new Error("Sharing cancelled");
       share.armExpiry();
       share.loop = share.run();
       return share;
