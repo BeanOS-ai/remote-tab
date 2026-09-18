@@ -14,3 +14,21 @@ when packaging a distribution. It is compiled into both the worker and manifest
 host permissions; the default `https://remote-tab.example` is a placeholder.
 The server never supplies browser code. Session codes and secrets stay in memory
 and are never logged or saved to extension storage.
+
+
+Load `dist/extension` using **Load unpacked** on `chrome://extensions` (Developer
+mode). Chrome 118+ is required. Open a normal HTTP(S) tab, paste the private code,
+choose the access mode and site scope, then **Share this tab**. Stop immediately
+detaches Chrome's debugger, even if the server is unreachable. Closing the tab,
+losing debugger control, expiry, or a transport integrity error ends local control.
+A browser/worker restart requires a new code and fresh consent; actions are never
+replayed from saved state.
+
+Site scope uses the complete vendored Public Suffix List, including private
+suffixes. The data keeps its upstream MPL-2.0 license; extension code is MIT.
+Screenshots always use the attached target via CDP, never the active window.
+Large snapshots travel as encrypted JSON attachments under the protocol's
+message ceiling. Network inspection always redacts credential headers.
+
+PR A supplies the core. Human takeover, field masking, handoff controls, and
+ledger export are added by the following M3 changes before distribution.
