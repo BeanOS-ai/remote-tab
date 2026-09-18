@@ -64,19 +64,29 @@ Non-goals (v1), explicitly deferred:
    yet and never will be.
 2. **Code.** The client library generates a random 256-bit **secret** locally
    and prints the **code** the human pastes:
-   `rt1.<session-id>.<base64url(secret)>`. The same thing as a link, for
-   channels where a click is easier: `https://<server>/s/<session-id>#<secret>`.
-   The secret sits after `#` so it never reaches the server. The agent hands
-   the code to the human on a private channel; the code is a bearer capability
-   for the duration of the redeem window.
+   `rt1.<session-id>.<base64url(secret)>`. The secret never reaches the
+   server: the extension sends only the session id when it redeems. The agent
+   hands the code to the human on a private channel; **the code is a bearer
+   capability and private delivery is the trust assumption** (§11). There is
+   no clickable link form in v1: a link would land on a web page, and any page
+   that can read the secret is a client that must be trusted with it (§5.5).
 3. **Redeem.** Extension → `POST /v1/sessions/{id}/redeem` with only the
    session id. One-shot: the first redeem wins and returns `browser_token`;
    any later redeem is refused. Redeem window: 10 minutes from create.
 4. **Hello.** Extension posts an encrypted `hello` message (mode, origin
-   scope, tab title/URL, extension version). The agent decrypts it. If the
-   agent cannot decrypt the hello, the code was redeemed by someone who does
-   not hold the secret: the agent revokes the session and tells its user.
-   This is the hijack detector, and it costs nothing.
+   scope, tab title/URL, extension version). The agent decrypts it. Hello
+   proves that the redeemer holds the secret; it does not prove who they are.
+   Two cases, kept distinct:
+   - **Only the session id leaked** (for example, it appeared in a server log
+     or a URL). A redeemer without the secret cannot produce a hello the agent
+     can decrypt. The agent stops the session and tells its user. The human,
+     when they paste the real code, sees "already redeemed" and knows too.
+   - **The complete code leaked** before the human redeemed it. The thief
+     holds the secret, wins the one-shot redeem, and can impersonate the
+     browser and read the agent's commands. Hello cannot detect this. The
+     defences are the private channel, the short redeem window, and the human
+     seeing "already redeemed" and telling the agent, which then stops the
+     session. §11 states this plainly; nothing downstream may assume more.
 5. **Drive.** Agent posts encrypted commands; extension executes, screenshots,
    posts encrypted results. Both sides long-poll for new sequence numbers.
 6. **Handoff.** Agent posts `handoff {message}`; the extension shows a banner
@@ -88,11 +98,12 @@ Non-goals (v1), explicitly deferred:
    session.
 8. **Expire.** TTL 30 minutes by default, 60 maximum. Only the extension can
    extend (human clicks **Extend**), and only in 30-minute steps to the max.
-9. **Ledger.** After stop/expiry the human opens the ledger from the
-   extension (or at `https://<server>/l/{id}#<secret>`), which decrypts
-   client-side, verifies the hash chain, and offers JSON + PNG export and a
-   GIF/video render. Objects are deleted by the store's lifecycle rule 24
-   hours after expiry; the export is the durable copy.
+9. **Ledger.** After stop/expiry the human opens the ledger **in the
+   extension** (an extension page, code shipped with the extension), which
+   decrypts locally, verifies the hash chain, and offers JSON + PNG export and
+   a GIF/video render. The agent side can do the same through the CLI. The
+   server serves no ledger page (§5.5). Objects are deleted by the store's
+   lifecycle rule 24 hours after expiry; the export is the durable copy.
 
 ## 5. Transport: the dead drop
 
@@ -104,7 +115,9 @@ value was ~880 characters (fixed later by a courier), and no third party could
 mint a share. A thin server fixes all three and gives one trust root (a
 domain) instead. It is still just a dead drop: it assigns sequence numbers,
 checks tokens, and stores blobs. End-to-end encryption means the server, its
-operator, and the store see ciphertext only.
+operator, and the store see ciphertext only. For that promise to survive a
+compromised server, the server must never be the source of code that handles
+a key: it is an API, not a web application (§5.5).
 
 ### 5.2 Crypto (deliberately boring)
 
@@ -126,6 +139,7 @@ operator, and the store see ciphertext only.
 
 All bodies are JSON unless noted. Authorization is a bearer token: the
 platform API key for create, `agent_token` or `browser_token` afterwards.
+These are the only routes; the server serves no pages (§5.5).
 
 | Method + path | Who | Purpose |
 |---|---|---|
@@ -157,6 +171,25 @@ persists them to the store. Nothing about consent, keys, or the ledger
 changes; the lane is an optimisation negotiated over the dead drop, and a
 client whose lane drops falls back to long-polling silently. WebRTC is
 possible for agents with UDP egress but is not worth its ops surface for v1.
+
+### 5.5 Custody rule: the server serves no executable code
+
+The blind-server promise (§2, §11) only holds if the secret is never handled
+by code the server delivered. A URL fragment keeps a secret out of the HTTP
+request, but not out of scripts running on the page that loaded it, and a
+compromised server could serve a script that reads the fragment and posts the
+key back. Therefore:
+
+- The server exposes the JSON API in §5.3 and nothing else. No HTML, no
+  JavaScript, no landing page for codes, no ledger viewer, no livestream
+  page. Requests for anything but the API return 404.
+- Every client that accepts a code or decrypts is **installed** code with its
+  own distribution and update channel: the packaged extension (Web Store),
+  the CLI and MCP server (npm), or a self-hoster's build of the same. Those
+  channels are the trust roots for client code; the dead-drop server is not.
+- Consequences for the rest of this design: no link form of the code (§4.2),
+  ledger viewing only in the extension or CLI (§4.9, §9), and any future
+  livestream viewer is an installed client, not a server page (§12).
 
 ## 6. Protocol vocabulary
 
@@ -232,13 +265,15 @@ the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
 
 ## 9. Ledger
 
-Every message is in the chain (§5.2). The ledger viewer (extension page or
-`/l/{id}#secret`) decrypts, verifies the chain end to end, and shows a
-timeline: command, plain-words summary, screenshot, result. Export produces
+Every message is in the chain (§5.2). The ledger viewer is an extension
+page (or `remote-tab ledger` in the CLI); it decrypts, verifies the chain end
+to end, and shows a timeline: command, plain-words summary, screenshot,
+result. It is never served by the dead-drop server (§5.5). Export produces
 `ledger.json` + `shots/*.png`. **Render** stitches the screenshots into a GIF
-or WebM in the browser, keyed by the session id so the same session always
-renders the same artifact. Rendering happens client-side because the server
-cannot decrypt; there is no server-side media pipeline.
+or WebM inside the extension page, keyed by the session id so the same
+session always renders the same artifact. Rendering happens in the installed
+client because the server cannot decrypt; there is no server-side media
+pipeline.
 
 ## 10. Limits and defaults
 
@@ -254,11 +289,29 @@ cannot decrypt; there is no server-side media pipeline.
 
 ## 11. Threat model (short form)
 
-- **Code leaks.** The code is a bearer capability for ≤ 10 min; a thief who
-  redeems it gets a session the real agent cannot use, and the agent detects
-  it at hello. Codes go only on private channels; the docs say so.
+- **Trust assumption: private delivery of the code.** The code carries the
+  secret. It must travel on a private, authenticated channel to the intended
+  human, and the docs, the CLI output, and the MCP tool description all say
+  so. Everything below is conditional on that.
+- **Session id leaks (without the secret).** A redeemer without the secret
+  cannot produce a decryptable hello; the agent stops the session and the
+  human sees "already redeemed". Worst case is denial of service for that
+  session.
+- **Complete code leaks before redeem.** The thief holds the secret and can
+  win the one-shot redeem, impersonate the browser, and decrypt the commands
+  the agent sends to that session. This is **not detectable
+  cryptographically**. Mitigations, not guarantees: the redeem window is
+  ≤ 10 min; the real human sees "already redeemed" and tells the agent; the
+  agent stops the session; the session is bound to a tab the thief controls,
+  not to the human's, so the thief gains the agent's commands, never the
+  human's data. A stronger pairing step (for example, a confirmation the human
+  reads from the extension and returns to the agent out of band) is possible
+  and deliberately not in v1.
 - **Server or store compromised.** Attacker gets ciphertext, sequence numbers,
-  timings, and the ability to deny service. No plaintext, no keys.
+  timings, and the ability to deny service. No plaintext, no keys, because no
+  client code comes from the server (§5.5). Compromise of a client
+  distribution channel (Web Store, npm) is outside this model, as it is for
+  any installed software.
 - **Malicious page.** Snapshot text and eval output are data. The extension
   executes nothing from the page. Credential and payment fields are never
   captured. The agent-side tool descriptions carry the same warning.
@@ -270,9 +323,10 @@ cannot decrypt; there is no server-side media pipeline.
 
 ## 12. Deferred designs (recorded so they stay consistent)
 
-- **Livestream.** A viewer link `https://<server>/v/{id}#<secret>` that
-  long-polls the same messages and decrypts in the viewer's browser. The
-  server stays blind; sharing the link shares the key, so the human decides.
+- **Livestream.** A read-only viewer that long-polls the same messages and
+  decrypts locally. Per §5.5 it is an installed client (a viewer mode of the
+  extension, or the CLI), not a page served by the dead-drop server. Sharing
+  a viewer code shares the key, so the human decides.
 - **Replay as automation.** The ledger already holds the command sequence
   with refs and screenshots; a replayer would map refs onto a fresh snapshot
   and stop at handoff points. Not before the live path is solid.

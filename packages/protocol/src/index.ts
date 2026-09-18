@@ -36,16 +36,23 @@ export interface Envelope {
   body: unknown;
 }
 
-/** Parse the human-pasted code. Returns null on any malformation. */
+/** Lowercase RFC 4122 v4 UUID: 8-4-4-4-12 hex groups, version nibble 4, variant 8..b. */
+export const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** 32 random bytes, base64url without padding. */
+export const SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Parse the human-pasted code `rt1.<session-id>.<secret>`. Returns null on any
+ * malformation so callers can reject before attempting a redeem. There is
+ * deliberately no link form: a link would hand the secret to a web page, and
+ * only installed clients may hold it (design §5.5).
+ */
 export function parseCode(code: string): { sessionId: string; secret: string } | null {
-  const trimmed = code.trim();
-  const link = trimmed.match(/^https?:\/\/[^/]+\/s\/([0-9a-f-]{36})#([A-Za-z0-9_-]{43})$/);
-  if (link) return { sessionId: link[1], secret: link[2] };
-  const parts = trimmed.split(".");
+  const parts = code.trim().split(".");
   if (parts.length !== 3 || parts[0] !== CODE_PREFIX) return null;
   const [, sessionId, secret] = parts;
-  if (!/^[0-9a-f-]{36}$/.test(sessionId)) return null;
-  if (!/^[A-Za-z0-9_-]{43}$/.test(secret)) return null;
+  if (!UUID_V4_RE.test(sessionId)) return null;
+  if (!SECRET_RE.test(secret)) return null;
   return { sessionId, secret };
 }
 
