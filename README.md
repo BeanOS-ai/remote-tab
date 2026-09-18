@@ -27,9 +27,10 @@ transport used by the extension and headless tests. Both peers verify the
 encrypted message chain before consuming messages. Browser automation and
 human consent UI remain the extension's responsibility.
 
-Status: M2 implemented: protocol, server, shared agent/browser client, MCP,
-CLI, and headless lifecycle tests. M3 is the Chrome extension driving a real
-tab. Read [`docs/design.md`](docs/design.md). License: MIT.
+Status: M1–M3 implemented: protocol, server, shared agent/browser client,
+MCP, CLI, and the Chrome extension with human controls, privacy enforcement,
+verified ledger export, and store packaging. BeanOS cutover (M4) and public
+release (M5) remain. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,
@@ -103,7 +104,7 @@ stopped state in its status without requiring another encrypted message.
 
 `BrowserPeer` supplies the same encrypted transport to installed browser
 clients and fake tabs in tests. It does not implement browser automation,
-mode/scope checks, redaction, or the consent UI; those belong to M3.
+mode/scope checks, redaction, or the consent UI; the installed extension implements those.
 
 ## MCP server
 
@@ -119,8 +120,9 @@ then call `remote_tab_wait_ready`. The server exposes every tool in design
 status, and stop. Tool descriptions identify page content as untrusted data.
 One MCP process holds one current session; stop it before creating another.
 Status includes transport state, expiry and sequence, plus the authenticated
-hello's mode/scope when available. Live human-pause state is not yet available;
-that requires the M3 extension's browser-state integration.
+hello's mode/scope when available. The MCP/CLI transport-status adapters do not
+query live human-pause state; the extension popup shows it, and queued browser
+commands receive `paused` while the human has taken over.
 
 ## CLI
 
@@ -159,7 +161,7 @@ overwritten. `ledger render --out session.gif` (or `.webm`) currently reports
 that rendering belongs in the installed extension ledger page. That page now
 exports a ZIP and renders a GIF locally; CLI rendering itself remains unimplemented.
 
-## Tests and extension work
+## Tests and extension
 
 Run `bun install --frozen-lockfile`, then `bun run test` for all tests or
 `bun run test:e2e` for the headless lifecycle suite. CI also builds the code,
@@ -170,10 +172,11 @@ fake form through `BrowserPeer`, the CLI, and MCP tools. It checks form state,
 encrypted PNG round trips, human handoff, stop/expiry, hijack suspicion, and
 verified ledger export. It does not require Chrome or external services.
 
-M3 supplies the installed extension: tab consent and binding, actual browser
-actions, mode/scope enforcement and redaction, live human-pause reporting,
-and the human-owned ledger viewer with GIF/WebM rendering. The fake tab is
-a protocol test fixture, not a substitute for those extension checks.
+The installed extension adds tab consent and binding, actual browser actions,
+mode/scope enforcement, redaction, human-pause controls, and the local ledger
+viewer with GIF rendering. Extension tests run its real driver loop against
+fake CDP; optional Chromium smoke scripts cover browser behavior, UI, media,
+and the packaged extension. See [verification instructions](packages/extension/README.md).
 
 ## Self-hosting and extension distribution
 
@@ -183,7 +186,7 @@ configuration. Keep credentials outside this checkout. `/docs` provides the
 agent bootstrap; the server never hosts a consent or ledger page.
 
 The installed extension must be built for that same origin. From a clean
-checkout with dependencies installed:
+checkout with Bun, Python 3, and workspace dependencies installed:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \

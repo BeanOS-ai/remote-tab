@@ -1,5 +1,28 @@
 import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
+import metadata from "./package.json";
+
+export const EXTENSION_VERSION = metadata.version;
+const icons = { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icons/icon128.png" };
+const staticFiles = [
+  ["popup.html", "popup.html"],
+  ["style.css", "style.css"],
+  ["ledger.html", "ledger.html"],
+  ["ledger.css", "ledger.css"],
+  ...Object.values(icons).map((file) => [file, file]),
+  ["../../LICENSE", "LICENSE"],
+  ["src/vendor/PSL-LICENSE", "vendor/PSL-LICENSE"],
+  ["src/vendor/README.md", "vendor/README.md"],
+  ["src/vendor/public-suffix-rules.json", "vendor/public-suffix-rules.json"],
+] as const;
+/** Store archives contain only these built runtime files, icons, and license sources. */
+export const STORE_FILES = [
+  "manifest.json",
+  "worker.js",
+  "popup.js",
+  "ledger.js",
+  ...staticFiles.map(([, target]) => target),
+].sort();
 
 export function serverOrigin(value = "https://remote-tab.example"): string {
   const url = new URL(value);
@@ -34,24 +57,23 @@ export async function buildExtension(
     define: { REMOTE_TAB_SERVER_ORIGIN: JSON.stringify(configuredOrigin) },
   });
   if (!built.success) throw new Error(built.logs.map(String).join("\n"));
-  await Bun.write(`${out}/popup.html`, Bun.file(`${import.meta.dir}/popup.html`));
-  await Bun.write(`${out}/style.css`, Bun.file(`${import.meta.dir}/style.css`));
-  await Bun.write(`${out}/ledger.html`, Bun.file(`${import.meta.dir}/ledger.html`));
-  await Bun.write(`${out}/ledger.css`, Bun.file(`${import.meta.dir}/ledger.css`));
+  for (const [source, target] of staticFiles)
+    await Bun.write(`${out}/${target}`, Bun.file(`${import.meta.dir}/${source}`));
   await Bun.write(
     `${out}/manifest.json`,
     `${JSON.stringify(
       {
         manifest_version: 3,
-        name: "Remote Tab",
-        version: "2.0.0",
+        name: "Bean Tab Share",
+        version: EXTENSION_VERSION,
         minimum_chrome_version: "125",
         description:
           "Share one tab with your agent. You control the mode, site scope, and when sharing stops.",
-        permissions: ["tabs", "scripting", "storage", "debugger"],
+        permissions: ["tabs", "debugger"],
         host_permissions: [`${configuredOrigin}/*`],
         background: { service_worker: "worker.js", type: "module" },
-        action: { default_popup: "popup.html" },
+        action: { default_popup: "popup.html", default_icon: icons },
+        icons,
         content_security_policy: { extension_pages: "script-src 'self'; object-src 'none'" },
       },
       null,

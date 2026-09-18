@@ -58,8 +58,27 @@ CLI export layout. Stopped/expired sessions can **Render GIF** locally: fixed
 the session id in the artifact. No media or code is fetched from a CDN. Rendering
 supports up to 300 screenshots; exceeding a limit shows an error rather than
 silently omitting history. The viewer accepts up to 5,000 entries / 96 MiB, with
-32 MiB of metadata; pending transfers expire after five minutes. Store packaging
-follows in the final M3 change.
+32 MiB of metadata; pending transfers expire after five minutes.
+
+Package version 2.0.0 for distribution with Bun and Python 3:
+
+```sh
+REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
+  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.0.zip
+```
+
+Release packaging requires an explicit HTTPS origin and rejects the development
+placeholder. It packages fresh runtime files, local icons, and MIT/PSL license
+and source notices with a root manifest, fixed archive metadata, and no tests
+or source maps. Existing output is refused unless `--force` is explicitly supplied. With no output argument it
+writes under ignored `dist/`. No upload or publication occurs.
+
+The store name stays **Bean Tab Share** until the public-release naming decision.
+Only `tabs` and `debugger` permissions are needed; all script execution and
+monitoring use CDP. The generic build accepts only `rt1.` codes. BeanOS carries
+its one-release 1.1.2 compatibility shim in its distribution during M4 because
+that path requires additional deployment-owned GCS/paste-bin hosts. Remove the
+shim in 2.1; those hosts never enter this generic build.
 
 
 Verification: `bun test packages/extension tests/e2e/extension*.test.ts` exercises
@@ -68,5 +87,6 @@ Chromium installed, run `bun scripts/extension-driver-smoke.mjs` for real CDP
 fixture coverage, `bun scripts/privacy-smoke.mjs` for pixel masking, or `bun scripts/extension-smoke.mjs` for the complete installed
 extension/server loop. `bun scripts/ledger-media-smoke.mjs` checks real GIF decoding, and
 `bun scripts/ledger-page-smoke.mjs` exercises the installed ledger UI.
+`bun scripts/store-package-smoke.mjs` loads the unpacked store ZIP in Chromium.
 The scripts accept `PLAYWRIGHT_MODULE` and
 `CHROMIUM_EXECUTABLE` to select locally installed tooling.
