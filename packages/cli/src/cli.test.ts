@@ -3,8 +3,8 @@ import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink } from "node:fs/prom
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BROWSER_TOOLS, BrowserPeer, PRIVATE_DELIVERY_WARNING } from "@remote-tab/client";
-import type { WireMessage } from "@remote-tab/protocol";
-import { verifyChain } from "@remote-tab/protocol/src/crypto";
+import type { WireMessage } from "../../protocol/src";
+import { verifyChain } from "../../protocol/src/crypto";
 import { createApp } from "../../server/src/app";
 import { MemoryStore } from "../../server/src/memory-store";
 import { defaultStatePath, parseArgs } from "./index";
