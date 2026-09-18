@@ -6,7 +6,8 @@ last_reviewed: 2026-09-18
 
 ## Agent quick-start and wire examples
 
-You need the server origin and a platform API key from its operator. Replace
+You need the server origin. Open deployments (including BeanOS) need no platform
+API key; ask the operator for a key only if creation returns 401. Replace
 `$SERVER`, `$ID`, and the angle-bracket placeholders below with your values.
 Keep tokens, the secret, and the code out of logs, public issues, URLs and
 third-party paste sites. Generate the 32-byte secret locally using a CSPRNG;
@@ -43,7 +44,8 @@ bootstrap code can expose browser results and screenshots as well as commands.
 
 ### Authentication, JSON and errors
 
-Create uses `Authorization: Bearer <platform-api-key>`. All other requests
+Create needs no Authorization header on an open deployment. On a keyed
+deployment, use `Authorization: Bearer <platform-api-key>`. All other requests
 except redeem use `Authorization: Bearer <agent-token>` (or browser token
 for browser requests). JSON POST bodies use `Content-Type: application/json`.
 Requests use HTTPS. Examples omit that header for brevity. Response timestamps
@@ -52,7 +54,10 @@ are ISO-8601 UTC. The server cannot validate encrypted contents.
 Errors are JSON `{ "error": "<code>", "message": "<detail>" }`: 400 invalid
 input, 401 missing/wrong credentials, 404 unknown path/session/blob, 409
 inactive session, already redeemed, TTL cap, or stale chain, 410 redeem
-window closed, 413 too large. A stale append additionally returns
+window closed, 413 too large, 429 `rate_limited` with `Retry-After` seconds.
+Creation rate limits reset; active capacity frees on stop/expiry. Blob and
+message budgets do not reset within a session: wait alone cannot replenish
+them. Reads and stop remain available. A stale append additionally returns
 `expected_prev_hash`; consume and verify intervening messages, then reseal
 with fresh nonce and the new AAD before retrying. Never reuse old ciphertext
 at a new chain position. Network errors after writes are ambiguous: read
@@ -62,10 +67,11 @@ and match the encrypted envelope's correlation id before sending again.
 
 ```http
 POST /v1/sessions
-Authorization: Bearer <platform-api-key>
 
 {"ttl_seconds":1800}
 ```
+
+Add the platform bearer header only when the operator requires a key.
 
 201:
 ```json

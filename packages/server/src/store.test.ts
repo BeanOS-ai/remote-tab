@@ -3,7 +3,13 @@ import { chainHash, verifyChain } from "@remote-tab/protocol/src/crypto";
 import { createApp } from "./app";
 import { GcsStore } from "./gcs-store";
 import { MemoryStore } from "./memory-store";
-import { ChainMismatch, SessionNotActive, type SessionRecord, type Store } from "./store";
+import {
+  ChainMismatch,
+  RateLimited,
+  SessionNotActive,
+  type SessionRecord,
+  type Store,
+} from "./store";
 
 const record: SessionRecord = {
   id: "test-session",
@@ -67,6 +73,229 @@ function gcsHarness() {
     new GcsStore({ bucket: "test", token: async () => "test", fetch: fetchFn });
   return { objects, hooks, makeStore };
 }
+
+const admission = {
+  clientIp: "192.0.2.1",
+  activePerIp: 1,
+  activeMax: 2,
+  now: new Date(record.createdAt),
+};
+
+for (const [name, makeStores] of [
+  [
+    "MemoryStore",
+    () => {
+      const store = new MemoryStore();
+      return [store, store] as const;
+    },
+  ],
+  [
+    "GcsStore",
+    () => {
+      const h = gcsHarness();
+      return [h.makeStore(), h.makeStore()] as const;
+    },
+  ],
+] as const) {
+  describe(`${name} limits`, () => {
+    test("parallel creates enforce IP and global caps across instances", async () => {
+      const [a, b] = makeStores();
+      const results = await Promise.allSettled([
+        a.createSession({ ...record, id: "one", state: "created" }, admission),
+        b.createSession({ ...record, id: "two", state: "created" }, admission),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(
+        (results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason,
+      ).toBeInstanceOf(RateLimited);
+      await b.createSession({ ...record, id: "other-ip" }, { ...admission, clientIp: "192.0.2.2" });
+      await expect(
+        a.createSession(
+          { ...record, id: "global" },
+          {
+            ...admission,
+            clientIp: "192.0.2.3",
+          },
+        ),
+      ).rejects.toBeInstanceOf(RateLimited);
+    });
+
+    test("different IPs racing for the last global slot admit one", async () => {
+      const [a, b] = makeStores();
+      const results = await Promise.allSettled(
+        [a, b].map((store, i) =>
+          store.createSession(
+            { ...record, id: `global-${i}` },
+            {
+              ...admission,
+              activeMax: 1,
+              clientIp: `192.0.2.${i + 1}`,
+            },
+          ),
+        ),
+      );
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(
+        (results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason,
+      ).toBeInstanceOf(RateLimited);
+    });
+
+    test("stopping and natural expiry each free capacity", async () => {
+      const [a, b] = makeStores();
+      await a.createSession(record, admission);
+      await b.updateSession(record.id, (s) => ({ ...s, state: "stopped" }));
+      await a.createSession({ ...record, id: "replacement" }, admission);
+      await b.createSession(
+        { ...record, id: "after-expiry", expiresAt: "2026-09-18T01:00:00Z" },
+        {
+          ...admission,
+          now: new Date(record.expiresAt),
+        },
+      );
+    });
+
+    test("extension retains capacity past the original expiry", async () => {
+      const [a, b] = makeStores();
+      await a.createSession(record, admission);
+      await b.updateSession(record.id, (s) => ({ ...s, expiresAt: "2026-09-18T01:00:00Z" }));
+      await expect(
+        a.createSession(
+          { ...record, id: "blocked" },
+          {
+            ...admission,
+            now: new Date(record.expiresAt),
+          },
+        ),
+      ).rejects.toBeInstanceOf(RateLimited);
+    });
+
+    test("message cap is checked again after a concurrent publication", async () => {
+      const [a, b] = makeStores();
+      await a.createSession(record);
+      const entered = deferred();
+      const release = deferred();
+      const pending = a.appendMessage(
+        record.id,
+        input,
+        async () => {
+          entered.resolve();
+          await release.promise;
+          return "loser";
+        },
+        1,
+      );
+      await entered.promise;
+      await b.appendMessage(record.id, input, async () => "winner", 1);
+      release.resolve();
+      await expect(pending).rejects.toBeInstanceOf(RateLimited);
+      await expect(
+        a.appendMessage(record.id, { ...input, prevHash: "winner" }, async () => "next", 1),
+      ).rejects.toBeInstanceOf(RateLimited);
+      expect(await a.listMessages(record.id, 0, 200)).toHaveLength(1);
+    });
+
+    test("concurrent blob uploads atomically reserve the cumulative byte budget", async () => {
+      const [a, b] = makeStores();
+      await a.createSession(record);
+      const results = await Promise.allSettled([
+        a.putBlob(record.id, "one", new Uint8Array(3), 5),
+        b.putBlob(record.id, "two", new Uint8Array(3), 5),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      expect(
+        (results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason,
+      ).toBeInstanceOf(RateLimited);
+      await b.putBlob(record.id, "rest", new Uint8Array(2), 5);
+      expect((await a.getSession(record.id))?.blobBytes).toBe(5);
+      await expect(a.putBlob(record.id, "excess", new Uint8Array(1), 5)).rejects.toBeInstanceOf(
+        RateLimited,
+      );
+      expect(await a.getBlob(record.id, "excess")).toBeNull();
+    });
+
+    test("duplicate blob IDs consume budget and terminal sessions reject uploads", async () => {
+      const [a, b] = makeStores();
+      await a.createSession(record);
+      await a.putBlob(record.id, "same", new Uint8Array(2), 4);
+      await b.putBlob(record.id, "same", new Uint8Array(2), 4);
+      await expect(a.putBlob(record.id, "same", new Uint8Array(1), 4)).rejects.toBeInstanceOf(
+        RateLimited,
+      );
+      await a.updateSession(record.id, (s) => ({ ...s, state: "stopped" }));
+      await expect(b.putBlob(record.id, "stopped", new Uint8Array(0), 4)).rejects.toBeInstanceOf(
+        SessionNotActive,
+      );
+    });
+  });
+}
+
+describe("GCS admission and byte reservation failures", () => {
+  test("ambiguous blob upload retains its reservation across restarts", async () => {
+    const h = gcsHarness();
+    const a = h.makeStore();
+    await a.createSession(record);
+    h.hooks.after = async (name) => {
+      if (name.includes("/blobs/")) return new Response(null, { status: 503 });
+    };
+    await expect(a.putBlob(record.id, "lost-ack", new Uint8Array(3), 3)).rejects.toThrow(
+      "HTTP 503",
+    );
+    expect((await h.makeStore().getSession(record.id))?.blobBytes).toBe(3);
+    await expect(
+      h.makeStore().putBlob(record.id, "next", new Uint8Array(1), 3),
+    ).rejects.toBeInstanceOf(RateLimited);
+  });
+
+  test("failed session creation retains its capacity reservation until expiry", async () => {
+    const h = gcsHarness();
+    const a = h.makeStore();
+    h.hooks.before = async (name, req) => {
+      if (name === stateObject && req.method === "POST") return new Response(null, { status: 503 });
+    };
+    await expect(a.createSession(record, admission)).rejects.toThrow("HTTP 503");
+    await expect(
+      h.makeStore().createSession({ ...record, id: "blocked" }, admission),
+    ).rejects.toBeInstanceOf(RateLimited);
+    await h.makeStore().createSession(
+      { ...record, id: "later", expiresAt: "2026-09-18T01:00:00Z" },
+      {
+        ...admission,
+        now: new Date(record.expiresAt),
+      },
+    );
+  });
+
+  test("extension cannot resurrect a slot concurrently reclaimed after expiry", async () => {
+    const h = gcsHarness();
+    const a = h.makeStore();
+    await a.createSession(record, admission);
+    const entered = deferred();
+    const release = deferred();
+    h.hooks.before = async (name, req) => {
+      if (name === "admission/active-sessions.json" && req.method === "POST") {
+        h.hooks.before = undefined;
+        entered.resolve();
+        await release.promise;
+      }
+      return undefined;
+    };
+    const extension = a.updateSession(record.id, (s) => ({
+      ...s,
+      expiresAt: "2026-09-18T01:00:00Z",
+    }));
+    await entered.promise;
+    await h.makeStore().createSession(
+      { ...record, id: "new", expiresAt: "2026-09-18T01:00:00Z" },
+      {
+        ...admission,
+        now: new Date(record.expiresAt),
+      },
+    );
+    release.resolve();
+    expect(await extension).toBeNull();
+    expect((await a.getSession(record.id))?.expiresAt).toBe(record.expiresAt);
+  });
+});
 
 async function append(store: Store, ciphertext = "first", prevHash = "") {
   return store.appendMessage(record.id, { ...input, ciphertext, prevHash }, (seq) =>

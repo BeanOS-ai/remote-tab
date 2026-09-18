@@ -39,8 +39,23 @@ of the server (domains, cloud projects, secrets) lives outside this repo.
 ## Server and agent bootstrap
 
 Run `bun install`, then `bun run build`; deploy the self-contained
-`dist/main.js` with Bun. Configure `REMOTE_TAB_API_KEYS` as
-`platform:key[,platform:key]` through the host environment. The default store
+`dist/main.js` with Bun. Creation is open when `REMOTE_TAB_API_KEYS` is unset
+or empty; no platform key is needed, and supplied bearers are accepted. To
+require keys, configure `REMOTE_TAB_API_KEYS=platform:key[,platform:key]`.
+Startup logs the active mode. BeanOS uses open creation with throttling.
+
+Both modes default to 10 creates/minute/IP (`REMOTE_TAB_CREATE_PER_MINUTE`,
+per instance), 20 concurrent sessions/IP (`REMOTE_TAB_ACTIVE_PER_IP`), 500
+concurrent sessions globally (`REMOTE_TAB_ACTIVE_MAX`), 64 MiB total blob
+bytes/session (`REMOTE_TAB_BLOB_BUDGET_BYTES`), and 5000 messages/session
+(`REMOTE_TAB_MESSAGES_MAX`). Configure positive integers. Exceeding a limit
+returns 429 `rate_limited` with `Retry-After`. GCS makes the concurrent and
+per-session caps shared across instances. The socket peer identifies clients
+unless `REMOTE_TAB_TRUST_PROXY=1` explicitly trusts the first
+`X-Forwarded-For` IP; enable only behind a proxy that replaces untrusted values.
+See design §10 for counting, expiry, and failure semantics.
+
+The default store
 is in-memory for development; GCS uses `REMOTE_TAB_STORE=gcs` and
 `REMOTE_TAB_GCS_BUCKET`. Deployment values and credentials belong outside
 this repository.

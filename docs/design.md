@@ -66,7 +66,8 @@ Non-goals (v1), explicitly deferred:
 
 ## 4. Session lifecycle
 
-1. **Create.** Agent → `POST /v1/sessions` with a platform API key. Server
+1. **Create.** Agent → `POST /v1/sessions`, with a platform API key only
+   when the operator requires one (§5.3). Server
    returns `{id, agent_token, expires_at}`. Server-side there is no plaintext
    yet and never will be.
 2. **Code.** The client library generates a random 256-bit **secret** locally
@@ -147,13 +148,16 @@ the server is an API, not a web application.
 ### 5.3 Server API (v1)
 
 All bodies are JSON unless noted. Authorization is a bearer token: the
-platform API key for create, `agent_token` or `browser_token` afterwards.
+optional platform API key for create, `agent_token` or `browser_token` afterwards.
+With `REMOTE_TAB_API_KEYS` unset or empty, creation is open, including requests
+carrying a bearer. When configured, a matching platform key is required. Both
+modes enforce the throttles in §10.
 The additional agent bootstrap routes are specified in §5.6; the server
 serves no pages (§5.5).
 
 | Method + path | Who | Purpose |
 |---|---|---|
-| `POST /v1/sessions` | agent (API key) | create; `{ttl_seconds?}` → `{id, agent_token, expires_at, redeem_until}` |
+| `POST /v1/sessions` | agent (optional API key) | create; `{ttl_seconds?}` → `{id, agent_token, expires_at, redeem_until}` |
 | `POST /v1/sessions/{id}/redeem` | browser (no token) | one-shot → `{browser_token, expires_at}` |
 | `POST /v1/sessions/{id}/messages` | agent or browser | append `{role, prev_hash, nonce, ciphertext}` → `{seq, hash}` |
 | `GET /v1/sessions/{id}/messages?after={seq}&wait=25` | agent or browser | long-poll up to 25 s; returns messages after `seq` |
@@ -385,6 +389,37 @@ pipeline.
 | Long-poll wait | 25 s | 25 s |
 | Snapshot size | 200 KiB | fixed; agent narrows with `ref` |
 | Object retention after expiry | 24 h | fixed |
+| Creates per client IP per minute | 10 | `REMOTE_TAB_CREATE_PER_MINUTE` |
+| Concurrent sessions per client IP | 20 | `REMOTE_TAB_ACTIVE_PER_IP` |
+| Concurrent sessions globally | 500 | `REMOTE_TAB_ACTIVE_MAX` |
+| Cumulative blob bytes per session | 64 MiB | `REMOTE_TAB_BLOB_BUDGET_BYTES` |
+| Messages per session (both roles combined) | 5000 | `REMOTE_TAB_MESSAGES_MAX` |
+
+All throttles apply in open and keyed mode and accept positive integer env
+values. Exceeding one returns HTTP 429, JSON `error: "rate_limited"`, and
+`Retry-After` seconds. Session blob/message budgets are lifetime totals; they
+do not replenish by waiting. Reads and stop remain available at the cap.
+
+Client identity defaults to the socket peer (last hop). Set
+`REMOTE_TAB_TRUST_PROXY=1` only behind a trusted proxy that replaces untrusted
+`X-Forwarded-For`; then the first IP in that header identifies the client.
+Invalid/missing forwarded IPs fall back to the socket peer. IPv6 forms are
+canonicalized and IPv4-mapped peers share the IPv4 quota. Without peer
+information, requests share one `unknown` quota.
+
+The create rate uses fixed 60-second windows **per instance**, so multiple
+Cloud Run instances multiply that allowance. GCS-backed active caps are shared
+across instances through a generation-matched admission index; unredeemed
+`created` sessions count too, until stop or expiry. Memory storage is local
+only. Blob-byte reservations and message sequence counts are on the session
+record and updated atomically across GCS instances. Blob reservations happen
+before upload; failed/ambiguous uploads conservatively consume budget.
+Admission reservations similarly survive ambiguous failures until expiry.
+The shared `admission/active-sessions.json` index must be excluded from bucket
+cleanup rules. During rollout, drain old instances and allow pre-upgrade
+sessions to expire (at most 60 minutes) before relying on the active caps: old
+session records have no client IP/admission entry or historical blob-byte total.
+Operators should use consistent limit configuration on all instances.
 
 ## 11. Threat model (short form)
 
@@ -464,13 +499,14 @@ they do not replace that planned extension coverage or real-tab verification.
 This repository ships code, a Dockerfile, and a reference deploy doc. It
 never contains a specific deployment: no domains, project ids, service
 accounts, or secrets. BeanOS deploys its instance from the
-BeanOS monorepo's Terraform, the same way the paste-bin is deployed, and
-issues platform API keys from its own secret store.
+BeanOS monorepo's Terraform, the same way the paste-bin is deployed, using
+open creation with throttling. Keyed deployments keep platform keys in their
+own secret store.
 
 ## 15. Migration for BeanOS
 
-1. Server live at its deployment-owned origin; BeanOS sessions get a platform key via the
-   broker.
+1. Server live at its deployment-owned origin with open, throttled creation;
+   BeanOS sessions need no platform key.
 2. Extension 2.0 ships on the existing listing; it accepts the new code and,
    for one release, still accepts the 1.1.2 pointer/uuid.
 3. `beanos-tab-share` skill becomes a wrapper over `remote-tab`; docs updated;
@@ -488,10 +524,12 @@ issues platform API keys from its own secret store.
 
 1. ~~License.~~ **Decided: MIT** (Gilad, 2026-09-18). `LICENSE` is in the repo
    from the first commit so nothing has to be relicensed at open-source time.
-2. **Settled for v1: static platform API keys**, configured through
-   `REMOTE_TAB_API_KEYS` as `platform:key` pairs and rotated by replacement.
+2. **Decided: optional platform API keys** (Gilad, 2026-09-18): “For the real
+   BeanOS deployment we shall set reasonable throttling without API key.”
+   BeanOS runs open + throttled. Operators may require static keys through
+   `REMOTE_TAB_API_KEYS` as `platform:key` pairs, rotated by replacement.
    Short-lived broker-minted platform keys are deferred.
 3. **Settled for v1: GCS-only session state**, with generation-matched cursor
-   publication (§5.3); the server stays stateless. The memory store is for
-   tests and local development.
+   publication (§5.3) and shared admission accounting. Only the create-rate
+   window is per instance. The memory store is for tests and local development.
 4. **Open (Gilad):** store-facing extension name at open-source time.

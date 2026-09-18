@@ -7,6 +7,8 @@
 import type { Role } from "@remote-tab/protocol";
 import {
   ChainMismatch,
+  RateLimited,
+  type SessionAdmission,
   SessionNotActive,
   type SessionRecord,
   type Store,
@@ -21,6 +23,14 @@ interface GcsMessage {
   message: StoredMessage;
   previousObject: string | null;
 }
+
+// One generation-CAS object serializes capacity decisions across every instance.
+// Exclude admission/ from bucket lifecycle deletion. Pre-upgrade sessions have no
+// reservation; drain older writers and let those sessions expire during rollout.
+// Reservations precede state creation/extension. Failed or ambiguous writes may
+// leave a conservative reservation until expiry, but cannot over-admit sessions.
+type AdmissionIndex = Record<string, { clientIp: string; expiresAt: string }>;
+const admissionObject = "admission/active-sessions.json";
 
 export interface GcsStoreOptions {
   bucket: string;
@@ -87,10 +97,43 @@ export class GcsStore implements Store {
     return { ok: true, generation: meta.generation ?? "" };
   }
 
-  async createSession(record: SessionRecord): Promise<void> {
+  private async changeAdmission(
+    mutate: (index: AdmissionIndex) => AdmissionIndex | null,
+  ): Promise<boolean> {
+    for (let attempt = 0; attempt < 32; attempt++) {
+      const current = await this.readJson<AdmissionIndex>(admissionObject);
+      const next = mutate(current?.value ?? {});
+      if (!next) return false;
+      const result = await this.writeJson(admissionObject, next, current?.generation ?? "0");
+      if (result.ok) return true;
+    }
+    throw new RateLimited();
+  }
+
+  async createSession(record: SessionRecord, admission?: SessionAdmission): Promise<void> {
+    if (admission) {
+      await this.changeAdmission((index) => {
+        const live = Object.fromEntries(
+          Object.entries(index).filter(
+            ([, entry]) => Date.parse(entry.expiresAt) > admission.now.getTime(),
+          ),
+        );
+        if (Object.hasOwn(live, record.id)) throw new Error("duplicate session id");
+        const entries = Object.values(live);
+        if (
+          entries.length >= admission.activeMax ||
+          entries.filter((entry) => entry.clientIp === admission.clientIp).length >=
+            admission.activePerIp
+        ) {
+          throw new RateLimited();
+        }
+        live[record.id] = { clientIp: admission.clientIp, expiresAt: record.expiresAt };
+        return live;
+      });
+    }
     const r = await this.writeJson(
       `sessions/${record.id}/state.json`,
-      { ...record, lastMessageObject: null },
+      { ...record, ...(admission && { clientIp: admission.clientIp }), lastMessageObject: null },
       "0",
     );
     if (!r.ok) throw new Error("duplicate session id");
@@ -109,12 +152,39 @@ export class GcsStore implements Store {
       if (!cur) return null;
       const next = mutate({ ...cur.value });
       if (!next) return null;
+      if (cur.value.clientIp && Date.parse(next.expiresAt) > Date.parse(cur.value.expiresAt)) {
+        const reserved = await this.changeAdmission((index) => {
+          if (!Object.hasOwn(index, id)) return null;
+          const entry = index[id];
+          return {
+            ...index,
+            [id]: {
+              ...entry,
+              expiresAt:
+                Date.parse(entry.expiresAt) > Date.parse(next.expiresAt)
+                  ? entry.expiresAt
+                  : next.expiresAt,
+            },
+          };
+        });
+        // A concurrent admission already reclaimed the expired reservation.
+        if (!reserved) return null;
+      }
       const r = await this.writeJson(
         `sessions/${id}/state.json`,
         { ...next, lastMessageObject: cur.value.lastMessageObject },
         cur.generation,
       );
-      if (r.ok) return next;
+      if (r.ok) {
+        if (cur.value.clientIp && (next.state === "stopped" || next.state === "expired")) {
+          await this.changeAdmission((index) => {
+            const remaining = { ...index };
+            delete remaining[id];
+            return remaining;
+          });
+        }
+        return next;
+      }
     }
     throw new Error("gcs updateSession: too many concurrent modifications");
   }
@@ -123,11 +193,13 @@ export class GcsStore implements Store {
     id: string,
     input: { role: Role; prevHash: string; nonce: string; ciphertext: string },
     hashFor: (seq: number) => Promise<string>,
+    messagesMax = Number.POSITIVE_INFINITY,
   ): Promise<StoredMessage> {
     for (let attempt = 0; attempt < 8; attempt++) {
       const cur = await this.readJson<GcsSessionRecord>(`sessions/${id}/state.json`);
       if (!cur) throw new Error("no such session");
       if (cur.value.state !== "active") throw new SessionNotActive();
+      if (cur.value.lastSeq >= messagesMax) throw new RateLimited();
       if (input.prevHash !== cur.value.lastHash) throw new ChainMismatch(cur.value.lastHash);
       const seq = cur.value.lastSeq + 1;
       const hash = await hashFor(seq);
@@ -183,7 +255,22 @@ export class GcsStore implements Store {
     return out.reverse().slice(0, limit);
   }
 
-  async putBlob(id: string, blobId: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+  async putBlob(
+    id: string,
+    blobId: string,
+    bytes: Uint8Array<ArrayBuffer>,
+    budgetBytes = Number.POSITIVE_INFINITY,
+  ): Promise<void> {
+    // Reserve before upload; concurrent writers share the state generation CAS.
+    // Never refund on upload failure: a lost acknowledgement may mean GCS stored
+    // the bytes. Duplicate blob IDs also consume budget, bounding upload traffic.
+    const reserved = await this.updateSession(id, (session) => {
+      if (session.state !== "active") throw new SessionNotActive();
+      const blobBytes = (session.blobBytes ?? 0) + bytes.byteLength;
+      if (blobBytes > budgetBytes) throw new RateLimited();
+      return { ...session, blobBytes };
+    });
+    if (!reserved) throw new SessionNotActive();
     const res = await this.fetchFn(
       this.uploadUrl(`sessions/${id}/blobs/${blobId}`, { ifGenerationMatch: "0" }),
       {
