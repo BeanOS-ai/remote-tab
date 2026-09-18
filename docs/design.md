@@ -445,6 +445,10 @@ server in-process, the shared browser protocol implementation (`BrowserPeer`)
 driven by a deterministic fake tab, and the real client through CLI and MCP.
 The M2 harness models snapshots, form actions, PNGs and human handoff; real
 extension tab execution, consent UI and enforcement arrive in M3.
+M3 acceptance includes extending this headless CI harness to execute the real
+extension implementation against a fake tab, including mode/scope enforcement,
+redaction and handoff. The M2 transport tests remain as regression coverage;
+they do not replace that planned extension coverage or real-tab verification.
 
 ## 14. Deployment boundary
 
