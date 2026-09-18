@@ -1,0 +1,15 @@
+{
+  "name": "remote-tab",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "bun test",
+    "check": "bunx biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/bun": "latest",
+    "typescript": "^5.6.0"
+  }
+}
