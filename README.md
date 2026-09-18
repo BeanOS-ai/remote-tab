@@ -156,7 +156,8 @@ including in a new invocation after stop; it does not wait for redemption.
 Export verifies the entire chain and decrypts attachments before writing
 `ledger.json`, `shots/*.png`, and any other blobs. Existing exports are not
 overwritten. `ledger render --out session.gif` (or `.webm`) currently reports
-that rendering will arrive with the M3 extension page.
+that rendering belongs in the installed extension ledger page. That page now
+exports a ZIP and renders a GIF locally; CLI rendering itself remains unimplemented.
 
 ## Tests and extension work
 

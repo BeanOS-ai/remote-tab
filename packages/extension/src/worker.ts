@@ -2,12 +2,41 @@ import { RemoteTabError } from "@remote-tab/client";
 import { parseCode } from "@remote-tab/protocol";
 import { type Sender, record } from "./chrome";
 import { DriverError, TabDriver } from "./driver";
+import { LedgerJobs } from "./ledger-data";
 import { PrivacyGuard } from "./privacy";
 import { siteForUrl } from "./scope";
 import { SharedSession } from "./session";
 import { TakeoverError, TakeoverMonitor } from "./takeover";
 
+const ledgers = new LedgerJobs();
 let active: SharedSession | undefined;
+async function openLedger(share: SharedSession, settled?: Promise<void>) {
+  const jobId = ledgers.create(share.peer, settled);
+  try {
+    await chrome.tabs.create({ url: chrome.runtime.getURL(`ledger.html#${jobId}`) });
+  } catch {
+    ledgers.release(jobId);
+    throw new Error("Could not open the ledger. Try again from the popup.");
+  }
+}
+function ledgerRequest(message: Record<string, unknown>) {
+  if (typeof message.jobId !== "string") throw new Error("Invalid ledger request");
+  const id = message.jobId;
+  if (message.action === "ledger-status") return ledgers.status(id);
+  if (message.action === "ledger-release") {
+    ledgers.release(id);
+    return { ok: true };
+  }
+  if (
+    message.action !== "ledger-chunk" ||
+    (message.kind !== "metadata" && message.kind !== "attachment") ||
+    typeof message.offset !== "number" ||
+    (message.entry !== undefined && typeof message.entry !== "number") ||
+    (message.attachment !== undefined && typeof message.attachment !== "number")
+  )
+    throw new Error("Invalid ledger request");
+  return ledgers.chunk(id, message.kind, message.offset, message.entry, message.attachment);
+}
 let tabId: number | undefined;
 let starting = false;
 let attempt: { cancelled: boolean } | undefined;
@@ -28,6 +57,11 @@ async function handle(message: unknown) {
       active.state.title = tab.title;
     }
     return { ...(active?.state ?? { sharing: false }), starting };
+  }
+  if (message.action === "open-ledger") {
+    if (!active) throw new Error("No session history is available in this worker");
+    await openLedger(active);
+    return { ok: true };
   }
   if (message.action === "stop") {
     cancelStart();
@@ -146,8 +180,15 @@ async function handle(message: unknown) {
     boundShare = await SharedSession.connect({
       isPaused: () => pending.paused,
       isCancelled: () => pending.cancelled,
+      onStop: (share, settled) => {
+        void openLedger(share, settled).catch(() => {
+          share.state.notice =
+            "Sharing stopped. Open the ledger from the popup to save your history.";
+        });
+      },
       code: message.code,
       serverUrl: REMOTE_TAB_SERVER_ORIGIN,
+      fetch: globalThis.fetch.bind(globalThis),
       driver: newDriver,
       hello: {
         mode,
@@ -178,8 +219,17 @@ async function handle(message: unknown) {
   }
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
-  if (!trusted(sender)) return undefined;
-  void handle(message).then(respond, (error) =>
+  const ledger =
+    record(message) &&
+    typeof message.jobId === "string" &&
+    sender.id === chrome.runtime.id &&
+    sender.url === chrome.runtime.getURL(`ledger.html#${message.jobId}`) &&
+    ["ledger-status", "ledger-chunk", "ledger-release"].includes(String(message.action));
+  if (!trusted(sender) && !ledger) return undefined;
+  const operation = ledger
+    ? Promise.resolve().then(() => ledgerRequest(message as Record<string, unknown>))
+    : handle(message);
+  void operation.then(respond, (error) =>
     respond({
       ok: false,
       error:

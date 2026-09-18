@@ -10,6 +10,7 @@ async function render() {
   const state = await chrome.runtime.sendMessage({ action: "state" });
   if (!record(state)) return;
   const sharing = state.sharing === true;
+  element("open-ledger").hidden = typeof state.sessionId !== "string";
   const starting = state.starting === true || submitting;
   element("consent").hidden = sharing || starting;
   element("live").hidden = !sharing;
@@ -80,7 +81,7 @@ element<HTMLFormElement>("consent").onsubmit = async (event) => {
     submitting = false;
   }
 };
-for (const action of ["stop", "extend", "done", "resume"]) {
+for (const action of ["stop", "extend", "done", "resume", "open-ledger"]) {
   element<HTMLButtonElement>(action).onclick = async () => {
     const button = element<HTMLButtonElement>(action);
     button.disabled = true;

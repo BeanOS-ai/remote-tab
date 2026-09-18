@@ -17,6 +17,7 @@ export interface ShareState {
   expiresAt?: string;
   notice?: string;
 }
+export type StopObserver = (share: SharedSession, settled: Promise<void>) => void;
 /** Owns one consented tab. The peer/key lives only in memory; restart requires fresh consent. */
 export class SharedSession {
   state: ShareState;
@@ -25,6 +26,7 @@ export class SharedSession {
   private commandPoll?: AbortController;
   private handoffDelivery?: Promise<void>;
   private stopping?: Promise<void>;
+  private started = false;
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private takeoverEpoch = 0;
   private actionEpoch?: number;
@@ -39,6 +41,7 @@ export class SharedSession {
     readonly driver: TabDriver,
     readonly detach: () => Promise<void>,
     hello: Hello,
+    private readonly onStop?: StopObserver,
   ) {
     this.state = {
       sharing: true,
@@ -61,17 +64,25 @@ export class SharedSession {
       detach: () => Promise<void>;
       isCancelled?: () => boolean;
       isPaused?: () => boolean;
+      onStop?: StopObserver;
     },
   ) {
     if (!parseCode(options.code)) throw new Error("Paste a valid rt1. code from your agent");
     const peer = await BrowserPeer.redeem(options);
-    const share = new SharedSession(peer, options.driver, options.detach, options.hello);
+    const share = new SharedSession(
+      peer,
+      options.driver,
+      options.detach,
+      options.hello,
+      options.onStop,
+    );
     try {
       share.state.expiresAt = (await peer.status()).expires_at;
       if (options.isCancelled?.()) throw new Error("Sharing cancelled");
       share.state.paused = options.isPaused?.() ?? false;
       share.driver.setPaused(share.state.paused);
       share.armExpiry();
+      share.started = true;
       share.loop = share.run();
       return share;
     } catch (error) {
@@ -282,6 +293,11 @@ export class SharedSession {
         this.state.notice = "Stopped locally; server unavailable or session expired.";
       }
     })();
+    try {
+      if (this.started) this.onStop?.(this, this.stopping);
+    } catch {
+      this.state.notice = "Sharing stopped. Open the ledger from the popup to save your history.";
+    }
     return this.stopping;
   }
   async settled() {

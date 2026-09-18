@@ -26,7 +26,7 @@ export async function buildExtension(
   await rm(out, { recursive: true, force: true });
   await mkdir(out, { recursive: true });
   const built = await Bun.build({
-    entrypoints: ["worker", "popup"].map((name) => `${import.meta.dir}/src/${name}.ts`),
+    entrypoints: ["worker", "popup", "ledger"].map((name) => `${import.meta.dir}/src/${name}.ts`),
     outdir: out,
     target: "browser",
     format: "esm",
@@ -36,6 +36,8 @@ export async function buildExtension(
   if (!built.success) throw new Error(built.logs.map(String).join("\n"));
   await Bun.write(`${out}/popup.html`, Bun.file(`${import.meta.dir}/popup.html`));
   await Bun.write(`${out}/style.css`, Bun.file(`${import.meta.dir}/style.css`));
+  await Bun.write(`${out}/ledger.html`, Bun.file(`${import.meta.dir}/ledger.html`));
+  await Bun.write(`${out}/ledger.css`, Bun.file(`${import.meta.dir}/ledger.css`));
   await Bun.write(
     `${out}/manifest.json`,
     `${JSON.stringify(

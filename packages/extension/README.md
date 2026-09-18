@@ -44,12 +44,29 @@ are discarded at that boundary.
 If privacy inspection or screenshot geometry validation fails, no result or
 image is sent. Session-only redaction state is never persisted.
 
-Ledger viewing/export and store packaging follow in the next M3 changes.
+Stop opens an installed ledger page automatically. **View ledger** opens an
+immutable snapshot while sharing. The worker decrypts and verifies using the
+existing browser peer, then transfers bounded chunks to the page without the
+session key. The page verifies the chain, final sequence/hash, and attachment
+hashes before enabling export. Completed transfers stay usable if the worker
+sleeps; no key or ledger is saved to extension storage. Closing/reloading the
+page or restarting the browser can lose that in-memory history, so export it.
+
+**Export ZIP** downloads `ledger.json`, `shots/*.png`, and any other blobs in the
+CLI export layout. Stopped/expired sessions can **Render GIF** locally: fixed
+640×360 frames, one second per screenshot, a deterministic RGB332 palette, and
+the session id in the artifact. No media or code is fetched from a CDN. Rendering
+supports up to 300 screenshots; exceeding a limit shows an error rather than
+silently omitting history. The viewer accepts up to 5,000 entries / 96 MiB, with
+32 MiB of metadata; pending transfers expire after five minutes. Store packaging
+follows in the final M3 change.
 
 
 Verification: `bun test packages/extension tests/e2e/extension*.test.ts` exercises
 fake-CDP enforcement and the real encrypted driver loop. With Playwright and
 Chromium installed, run `bun scripts/extension-driver-smoke.mjs` for real CDP
 fixture coverage, `bun scripts/privacy-smoke.mjs` for pixel masking, or `bun scripts/extension-smoke.mjs` for the complete installed
-extension/server loop. The scripts accept `PLAYWRIGHT_MODULE` and
+extension/server loop. `bun scripts/ledger-media-smoke.mjs` checks real GIF decoding, and
+`bun scripts/ledger-page-smoke.mjs` exercises the installed ledger UI.
+The scripts accept `PLAYWRIGHT_MODULE` and
 `CHROMIUM_EXECUTABLE` to select locally installed tooling.

@@ -35,7 +35,8 @@ test("browser bundle and manifest share one origin with no broad or legacy hosts
     expect(worker).not.toContain("https://remote-tab.example");
     expect(worker).not.toContain("storage.googleapis.com");
     expect(/(?:from|import)\s*["\']node:/.test(worker)).toBe(false);
-    expect(await Bun.file(`${out}/popup.js`).exists()).toBe(true);
+    for (const file of ["popup.js", "ledger.js", "ledger.html", "ledger.css"])
+      expect(await Bun.file(`${out}/${file}`).exists()).toBe(true);
   } finally {
     await rm(out, { recursive: true, force: true });
   }
