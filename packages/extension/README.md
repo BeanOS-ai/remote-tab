@@ -31,12 +31,16 @@ Large snapshots travel as encrypted JSON attachments under the protocol's
 message ceiling. Network inspection always redacts credential headers.
 
 The popup shows recent actions, Stop, Extend near expiry, handoff Done, and
-Resume after human input pauses sharing. An interrupted command remains paused
+Resume after human input pauses sharing. Pages with preexisting window capture
+handlers that could suppress takeover detection are refused; the extension does
+not reload the page or discard form state. An interrupted command remains paused
 even if the human quickly resumes. Chrome’s debugging bar is expected.
 
 Password, one-time-code, and payment-card fields are scrubbed from results and
 masked locally in screenshots; embedded frames are masked in full. Full-mode
-scripting is refused while protected fields or uninspected frames are present.
+scripting and console/network inspection are refused for the rest of a share
+once protected fields or uninspected frames are encountered. Diagnostic buffers
+are discarded at that boundary.
 If privacy inspection or screenshot geometry validation fails, no result or
 image is sent. Session-only redaction state is never persisted.
 

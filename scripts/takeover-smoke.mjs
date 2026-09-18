@@ -2,7 +2,7 @@
 // PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CHROMIUM_EXECUTABLE=/path/to/chrome bun scripts/takeover-smoke.mjs
 import assert from "node:assert/strict";
 import { TabDriver } from "../packages/extension/src/driver.ts";
-import { TakeoverMonitor } from "../packages/extension/src/takeover.ts";
+import { TakeoverError, TakeoverMonitor } from "../packages/extension/src/takeover.ts";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
 const browser = await chromium.launch({
@@ -17,8 +17,19 @@ try {
       body: `<!doctype html><title>Takeover fixture</title>
       <style>body{padding:30px}input,button{margin:20px;width:180px;height:40px}</style>
       <label>Name <input id=name aria-label=Name></label><button id=submit>Submit</button>
-      <p id=result role=status></p>
-      <script>submit.onclick=()=>result.textContent='Clicked';</script>`,
+      <p id=result role=status></p><iframe id=frame srcdoc="<input aria-label='Child input'>"></iframe>
+      <script>submit.onclick=()=>result.textContent='Clicked';</script>
+      ${
+        new URL(route.request().url()).pathname === "/hostile"
+          ? `<script>
+        const actualWindow=this;
+        actualWindow.addEventListener('keydown',event=>{
+          if(event.isTrusted){actualWindow.hostileSwallowed=true;event.stopImmediatePropagation();}
+        },true);
+        Object.defineProperty(actualWindow,'globalThis',{value:{decoy:true},configurable:true});
+      </script>`
+          : ""
+      }`,
     }),
   );
   const page = await context.newPage();
@@ -40,12 +51,22 @@ try {
       trace.push({ paused: true });
     },
   );
-  const driver = new TabDriver((method, params) => monitor.dispatch(method, params), {
-    mode: "act",
-    scope: "takeover.test",
-    url: page.url(),
-    title: "Takeover fixture",
-  });
+  const maintenance = new Set([
+    "Fetch.continueRequest",
+    "Fetch.failRequest",
+    "Page.handleJavaScriptDialog",
+    "Page.stopLoading",
+  ]);
+  const driver = new TabDriver(
+    (method, params) =>
+      maintenance.has(method) ? cdp.send(method, params) : monitor.dispatch(method, params),
+    {
+      mode: "act",
+      scope: "takeover.test",
+      url: page.url(),
+      title: "Takeover fixture",
+    },
+  );
   for (const method of [
     "Runtime.executionContextCreated",
     "Runtime.executionContextDestroyed",
@@ -88,6 +109,18 @@ try {
   }
   assert.equal(await page.locator("#result").textContent(), "Clicked");
   assert.equal(await page.locator("#name").inputValue(), "aB");
+  const child = page.frameLocator("#frame").locator("input");
+  const box = await child.boundingBox();
+  assert.ok(box);
+  for (const type of ["mouseMoved", "mousePressed", "mouseReleased"])
+    await monitor.dispatch("Input.dispatchMouseEvent", {
+      type,
+      x: box.x + 20,
+      y: box.y + 10,
+      ...(type !== "mouseMoved" ? { button: "left", clickCount: 1 } : {}),
+    });
+  await cdp.send("Runtime.evaluate", { expression: "0" });
+  assert.equal(pauses, 0, "Own input into same-process iframe must match its root dispatch marker");
   await page.evaluate(() => {
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", bubbles: true }));
     window.dispatchEvent(
@@ -102,11 +135,65 @@ try {
   await page.mouse.click(20, 20);
   await cdp.send("Runtime.evaluate", { expression: "0" });
   assert.ok(pauses > afterKeyboard, "External trusted mouse input must pause");
+  const afterMouse = pauses;
+  await child.click();
+  await cdp.send("Runtime.evaluate", { expression: "0" });
+  assert.ok(pauses > afterMouse, "Human input in iframe must pause");
   assert.deepEqual(errors, []);
+  await driver.execute("browser_navigate", { url: "https://takeover.test/next" });
+  await driver.execute("browser_snapshot");
+  assert.deepEqual(errors, [], "Normal navigation must re-admit the replacement worlds");
+  await page.evaluate(() => {
+    document.open();
+    document.write("<input>");
+    document.close();
+  });
+  await assert.rejects(
+    monitor.dispatch("Runtime.evaluate", { expression: "document.body.textContent" }),
+    TakeoverError,
+  );
   await monitor.dispose();
   await cdp.detach();
+  const hostilePage = await context.newPage();
+  await hostilePage.goto("https://takeover.test/hostile");
+  const hostileCdp = await context.newCDPSession(hostilePage);
+  const hostile = new TakeoverMonitor(
+    (method, params) => hostileCdp.send(method, params),
+    () => {},
+  );
+  for (const method of [
+    "Runtime.executionContextCreated",
+    "Runtime.executionContextDestroyed",
+    "Runtime.executionContextsCleared",
+    "Runtime.bindingCalled",
+  ])
+    hostileCdp.on(method, (params) => {
+      void hostile.onEvent(method, params).catch(() => {});
+    });
+  assert.equal(
+    (
+      await hostileCdp.send("Runtime.evaluate", {
+        expression: "globalThis.decoy",
+        returnByValue: true,
+      })
+    ).result.value,
+    true,
+  );
+  await assert.rejects(hostile.initialize(), TakeoverError);
+  await hostilePage.keyboard.press("x");
+  assert.equal(
+    (
+      await hostileCdp.send("Runtime.evaluate", {
+        expression: "this.hostileSwallowed",
+        returnByValue: true,
+      })
+    ).result.value,
+    true,
+  );
+  await hostile.dispose();
+  await hostileCdp.detach();
   console.log(
-    "PASS: real Chromium wrapped hover/click/key/drag do not pause; external trusted keyboard/mouse pause; synthetic page events ignored. Automation timestamps are about 1 second ahead to distinguish delayed own events.",
+    "PASS: real Chromium wrapped hover/click/key/drag and iframe clicks do not pause; human keyboard/mouse/iframe input pauses; synthetic events ignored; navigation rechecked; hostile trusted-only capture handlers and document.open fail closed. Automation timestamps are about 1 second ahead.",
   );
 } finally {
   await browser.close();

@@ -133,6 +133,7 @@ export class PrivacyGuard {
   private bytes = 0;
   private replacement: RegExp | undefined;
   private failed = false;
+  private protectedContentSeen = false;
   private readonly maskImage: MaskImage;
   constructor(
     private readonly cdp: Cdp,
@@ -141,7 +142,9 @@ export class PrivacyGuard {
     this.maskImage = options.maskImage ?? maskPng;
   }
   get hasSensitive(): boolean {
-    return this.state?.hasSensitive ?? true;
+    // A page can log and clear a field between scans, then remove the field.
+    // Free-form diagnostics and scripting must remain denied for this share.
+    return this.protectedContentSeen || (this.state?.hasSensitive ?? true);
   }
   isSensitive(backendNodeId: number): boolean {
     return this.state?.sensitiveIds.has(backendNodeId) ?? false;
@@ -222,6 +225,8 @@ export class PrivacyGuard {
         throw deny();
       const strings = snapshot.strings;
       const string = (index: unknown): string => {
+        // Chromium uses -1 for empty strings, including an empty live input value.
+        if (index === -1) return "";
         if (!Number.isInteger(index) || typeof strings[Number(index)] !== "string") throw deny();
         return strings[Number(index)] as string;
       };
@@ -274,9 +279,13 @@ export class PrivacyGuard {
             attributes.set(string(pairs[j]).toLowerCase(), string(pairs[j + 1]));
           const field = ["INPUT", "TEXTAREA", "SELECT"].includes(name) && sensitive(attributes);
           const frame = ["IFRAME", "FRAME", "OBJECT", "EMBED"].includes(name);
-          if (frame && !childDocuments.has(i)) hasSensitive = true;
+          if (frame && !childDocuments.has(i)) {
+            hasSensitive = true;
+            this.protectedContentSeen = true;
+          }
           if (field) {
             hasSensitive = true;
+            this.protectedContentSeen = true;
             if (!Number.isInteger(ids[i])) throw deny();
             sensitiveIds.add(Number(ids[i]));
             if (name === "SELECT") sensitiveSelects.add(i);
@@ -311,6 +320,7 @@ export class PrivacyGuard {
         }
       }
       const root = record(snapshot.documents[0]);
+      this.protectedContentSeen ||= hasSensitive;
       this.state = {
         frame: string(root.frameId),
         document: string(root.documentURL),

@@ -1,6 +1,7 @@
 // Optional real-Chromium pixel test. Run with Bun and a separate Playwright install:
 // PLAYWRIGHT_MODULE=/path/to/playwright/index.mjs CHROMIUM_EXECUTABLE=/path/to/chrome bun scripts/privacy-smoke.mjs
 import assert from "node:assert/strict";
+import { TabDriver } from "../packages/extension/src/driver.ts";
 import { PrivacyGuard } from "../packages/extension/src/privacy.ts";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
@@ -122,8 +123,48 @@ try {
     [50, 200],
   ]);
   for (const pixel of scroll.pixels) assert.deepEqual(pixel, [0, 0, 0, 255]);
+  // Existing capture handlers can suppress DOM-based takeover listeners. The
+  // privacy boundary must independently withhold unknown transient values.
+  await page.evaluate(() => {
+    const input = document.querySelector("#password");
+    input.value = "";
+    for (const type of ["keydown", "keyup", "pointerdown", "pointerup"])
+      window.addEventListener(
+        type,
+        (event) => {
+          if (event.key === "Enter") {
+            console.log(input.value);
+            input.value = "";
+          }
+          event.stopImmediatePropagation();
+        },
+        true,
+      );
+  });
+  const send = (method, params) => cdp.send(method, params);
+  const protectedDriver = new TabDriver(send, {
+    mode: "full",
+    scope: null,
+    url: page.url(),
+    title: "Privacy test",
+    privacy: new PrivacyGuard(send),
+  });
+  cdp.on("Runtime.consoleAPICalled", (params) => {
+    void protectedDriver.onEvent("Runtime.consoleAPICalled", params);
+  });
+  await protectedDriver.initialize();
+  await page.locator("#password").focus();
+  await page.keyboard.type("FAKE-PRIVATE-123");
+  await page.keyboard.press("Enter");
+  assert.equal(await page.locator("#password").inputValue(), "");
+  await page.evaluate(() => document.body.replaceChildren());
+  for (const tool of ["browser_console_messages", "browser_network_requests", "browser_evaluate"])
+    await assert.rejects(protectedDriver.execute(tool, { function: "() => 1" }), {
+      code: "privacy_denied",
+    });
+  assert.ok(!JSON.stringify(protectedDriver).includes("FAKE-PRIVATE-123"));
   console.log(
-    "PASS: real Chromium password/OTP/closed-shadow values scrubbed; pixel masks cover inputs and cross-origin iframe at DPR 2, crop and scroll; ordinary pixels preserved",
+    "PASS: real Chromium protected-field pixel masks at DPR 2/crop/scroll, ordinary pixels preserved; preexisting capture handlers cannot expose typed/logged/cleared protected values through diagnostics or scripting",
   );
 } finally {
   await browser.close();

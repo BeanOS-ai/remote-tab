@@ -151,10 +151,27 @@ export class TabDriver {
    * across that boundary instead of retaining values the scanner never saw. */
   setPaused(paused: boolean): void {
     this.paused = paused;
+    this.clearDiagnostics();
+  }
+  private clearDiagnostics(): void {
     this.network.clear();
     this.console = [];
     this.networkDropped = 0;
     this.consoleDropped = 0;
+  }
+  private async scanPrivacy(): Promise<void> {
+    await this.options.privacy?.scan();
+    if (this.options.privacy?.hasSensitive) this.clearDiagnostics();
+  }
+  private checkPrivateTool(tool: string): void {
+    if (
+      this.options.privacy?.hasSensitive &&
+      ["browser_console_messages", "browser_network_requests", "browser_evaluate"].includes(tool)
+    )
+      throw new DriverError(
+        "privacy_denied",
+        "Diagnostics and scripting are unavailable after this share encounters protected fields or uninspected embedded content",
+      );
   }
   private async send(
     method: string,
@@ -184,7 +201,7 @@ export class TabDriver {
     this.frameId = str(rec(tree.frame).id);
     if (rec(tree.frame).url) this.url = str(rec(tree.frame).url, 10000);
     this.checkUrl(this.url);
-    await this.options.privacy?.scan();
+    await this.scanPrivacy();
   }
   private clearDocument(): void {
     this.contextId = undefined;
@@ -270,7 +287,10 @@ export class TabDriver {
       this.options.onNotice?.({ code: "dialog_dismissed", message: "A page dialog was dismissed" });
     }
     // Lifecycle and request interception above must keep working during handoff.
-    if (this.paused) return;
+    if (this.paused || this.options.privacy?.hasSensitive) {
+      this.clearDiagnostics();
+      return;
+    }
     if (method.startsWith("Network.") && typeof params.requestId === "string") {
       const id = params.requestId;
       const entry = this.network.get(id) ?? { requestId: id };
@@ -435,7 +455,7 @@ export class TabDriver {
   private async snapshot(ref?: string): Promise<() => unknown> {
     if (ref) await this.node(ref, "check");
     const response = await this.send("Accessibility.getFullAXTree");
-    await this.options.privacy?.scan();
+    await this.scanPrivacy();
     let nodes = list(response.nodes).map(rec);
     if (ref) {
       const root = nodes.find((node) => node.backendDOMNodeId === this.backend(ref));
@@ -666,7 +686,8 @@ export class TabDriver {
     if ("selector" in args) throw new DriverError("invalid", "Use a snapshot ref, not a selector");
     this.checkUrl(this.url);
     this.scopeError = undefined;
-    await this.options.privacy?.scan();
+    await this.scanPrivacy();
+    this.checkPrivateTool(tool);
     let result: unknown = { ok: true };
     let renderSnapshot: (() => unknown) | undefined;
     if (tool === "browser_snapshot")
@@ -758,11 +779,6 @@ export class TabDriver {
           throw new DriverError("timeout", "Text did not appear within 10 seconds");
       }
     } else if (tool === "browser_evaluate") {
-      if (this.options.privacy?.hasSensitive)
-        throw new DriverError(
-          "privacy_denied",
-          "Scripting is unavailable while sensitive fields or uninspected embedded content are present",
-        );
       const evaluated = await this.send("Runtime.evaluate", {
         expression: `(${required(args, "function")})()`,
         returnByValue: true,
@@ -777,10 +793,12 @@ export class TabDriver {
     }
     if (isActing(tool)) await this.waitForNavigation();
     if (this.scopeError) throw this.scopeError;
-    await this.options.privacy?.scan();
+    await this.scanPrivacy();
+    this.checkPrivateTool(tool);
     result = renderSnapshot ? renderSnapshot() : this.sanitizeOutput(tool, result);
     result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
     const screenshot = isActing(tool) ? await this.screenshot() : undefined;
+    this.checkPrivateTool(tool);
     // Screenshot scans can discover newly filled fields. Scrub once more before
     // constructing any transport payload, with all discovered values available.
     if (screenshot) result = this.sanitizeOutput(tool, result);

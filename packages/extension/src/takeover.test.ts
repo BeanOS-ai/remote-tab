@@ -13,7 +13,16 @@ const pointer = {
   modifiers: 0,
 };
 
-async function harness() {
+const inputTypes = [
+  "keydown",
+  "keyup",
+  "pointerdown",
+  "pointerup",
+  "pointermove",
+  "pointercancel",
+  "wheel",
+];
+async function harness(foreignListeners: unknown[] = []) {
   const calls: Call[] = [];
   let human = 0;
   let raw: ((call: Call) => Promise<unknown>) | undefined;
@@ -21,7 +30,38 @@ async function harness() {
     async (method, params, sessionId) => {
       const call = { method, params: params ?? {}, sessionId };
       calls.push(call);
-      return raw ? raw(call) : { identifier: `script-${sessionId ?? "root"}` };
+      if (method === "Runtime.enable")
+        await monitor.onEvent(
+          "Runtime.executionContextCreated",
+          {
+            context: { id: 90, name: "", auxData: { isDefault: true, frameId: "main" } },
+          },
+          sessionId,
+        );
+      if (method === "Page.addScriptToEvaluateOnNewDocument")
+        await monitor.onEvent(
+          "Runtime.executionContextCreated",
+          {
+            context: {
+              id: 1,
+              name: params?.worldName,
+              auxData: { isDefault: false, frameId: "main" },
+            },
+          },
+          sessionId,
+        );
+      if (method === "Runtime.evaluate" && params?.expression === "this")
+        return { result: { className: "Window", objectId: `window-${params.contextId}` } };
+      if (method === "DOMDebugger.getEventListeners")
+        return {
+          listeners:
+            params?.objectId === "window-90"
+              ? foreignListeners
+              : inputTypes.map((type) => ({ type, useCapture: true })),
+        };
+      if (method === "Runtime.releaseObject") return {};
+      if (raw) return raw(call);
+      return { identifier: `script-${sessionId ?? "root"}` };
     },
     () => {
       human++;
@@ -35,7 +75,7 @@ async function harness() {
     monitor.onEvent(
       "Runtime.executionContextCreated",
       {
-        context: { id, name, auxData: { isDefault, frameId: `frame-${id}` } },
+        context: { id, name, auxData: { isDefault, frameId: "main" } },
       },
       sessionId,
     );
@@ -49,7 +89,6 @@ async function harness() {
       },
       sessionId,
     );
-  await context();
   return {
     monitor,
     calls,
@@ -117,6 +156,41 @@ test("installs a named isolated world, binding and recursive iframe-only attachm
     "unknown",
   );
   expect(h.calls.length).toBe(before);
+});
+
+test("existing capture handlers and unrecognized listener metadata fail closed", async () => {
+  await expect(harness([{ type: "keydown", useCapture: true }])).rejects.toThrow(
+    "prevents reliable takeover",
+  );
+  await expect(harness([{ type: "pointerdown" }])).rejects.toThrow("prevents reliable takeover");
+  const harmless = await harness([{ type: "keydown", useCapture: false }]);
+  expect(harmless.humans()).toBe(0);
+  expect(
+    harmless.calls
+      .filter((call) => call.method === "Runtime.evaluate")
+      .every((call) => call.params.expression === "this"),
+  ).toBe(true);
+});
+
+test("missing isolated watcher for a new frame blocks commands before raw dispatch", async () => {
+  const h = await harness();
+  await h.monitor.onEvent("Runtime.executionContextCreated", {
+    context: { id: 99, name: "", auxData: { isDefault: true, frameId: "unwatched-frame" } },
+  });
+  await expect(
+    h.monitor.dispatch("Input.dispatchKeyEvent", { type: "keyDown", key: "a" }),
+  ).rejects.toThrow("prevents reliable takeover");
+  expect(h.calls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(false);
+});
+
+test("document.open invalidates takeover even if execution contexts survive", async () => {
+  const h = await harness();
+  await expect(h.monitor.onEvent("Page.documentOpened", {})).rejects.toThrow(
+    "prevents reliable takeover",
+  );
+  await expect(h.monitor.dispatch("Runtime.evaluate", { expression: "1" })).rejects.toThrow(
+    "prevents reliable takeover",
+  );
 });
 
 test("isolated listener ignores synthetic input and reports only trusted event metadata", async () => {
@@ -288,8 +362,6 @@ test("child input and dispatch are scoped by session and detached descendants ar
     { sessionId: "grandchild", targetInfo: { type: "iframe" } },
     "child",
   );
-  await h.context(1, "child");
-  await h.context(1, "grandchild");
   h.setRaw(async ({ params }) => {
     await h.input({ ...key, timestamp: Math.round(Number(params.timestamp) * 1000) }, 1, "child");
     await h.input(key);
@@ -314,6 +386,27 @@ test("late binding after dispatch response matches only its timestamp, never ide
   await h.input({ ...key, timestamp });
   expect(h.humans()).toBe(1);
   await h.input({ ...key, timestamp });
+  expect(h.humans()).toBe(2);
+});
+
+test("a root dispatch marker follows child frames without comparing incompatible local coordinates", async () => {
+  const h = await harness();
+  await h.monitor.onEvent("Target.attachedToTarget", {
+    sessionId: "child",
+    targetInfo: { type: "iframe" },
+  });
+  await h.monitor.dispatch("Input.dispatchMouseEvent", {
+    type: "mousePressed",
+    x: 414,
+    y: 323,
+    button: "left",
+  });
+  const timestamp = Math.round(Number(h.calls.at(-1)?.params.timestamp) * 1000);
+  await h.input({ ...pointer, timestamp, modifiers: 2 }, 1, "child");
+  expect(h.humans()).toBe(1);
+  await h.input({ ...pointer, timestamp }, 1, "child");
+  expect(h.humans()).toBe(1);
+  await h.input({ ...pointer, timestamp: Date.now() }, 1, "child");
   expect(h.humans()).toBe(2);
 });
 

@@ -5,7 +5,7 @@ import { DriverError, TabDriver } from "./driver";
 import { PrivacyGuard } from "./privacy";
 import { siteForUrl } from "./scope";
 import { SharedSession } from "./session";
-import { TakeoverMonitor } from "./takeover";
+import { TakeoverError, TakeoverMonitor } from "./takeover";
 
 let active: SharedSession | undefined;
 let tabId: number | undefined;
@@ -106,10 +106,20 @@ async function handle(message: unknown) {
         "Fetch.continueRequest",
         "Fetch.failRequest",
         "Page.handleJavaScriptDialog",
+        "Page.stopLoading",
       ].includes(method);
       if (boundShare?.interrupted && !maintenance)
         throw new DriverError("paused", "Paused: you took over");
-      return takeover.dispatch(method, params);
+      // These lifecycle barriers also run between old and new document worlds.
+      if (maintenance) return rawCdp(method, params);
+      return takeover.dispatch(method, params).catch((error) => {
+        if (error instanceof TakeoverError) {
+          pending.cancelled = true;
+          if (boundShare) boundShare.state.notice = error.message;
+          void boundShare?.stop();
+        }
+        throw error;
+      });
     };
     const privacy = new PrivacyGuard(cdp);
     await privacy.scan();
@@ -183,6 +193,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 chrome.debugger.onEvent.addListener((target, method, params) => {
   if (target.tabId !== tabId) return;
   const failed = () => {
+    if (active?.state.sharing)
+      active.state.notice = "Sharing ended because this page could no longer be controlled safely";
     cancelStart();
     return active?.stop();
   };

@@ -20,7 +20,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
+async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existingCapture = false) {
   const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["test", "test-key"]]) });
   const directFetch: Fetch = (request) => app.fetch(request);
   const { code, session } = await createSession({
@@ -35,6 +35,7 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
   const detached: number[] = [];
   const fetchedTabs: number[] = [];
   const cdpCalls: { method: string; params: Record<string, unknown> }[] = [];
+  let ownListenersRemoved = false;
   let holdNextWrite = false;
   let statusReads = 0;
   let queries = 0;
@@ -81,6 +82,45 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
       },
       sendCommand: async (_target, method, params = {}) => {
         cdpCalls.push({ method, params });
+        if (method === "Runtime.enable") {
+          onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
+            context: { id: 1, name: "", auxData: { isDefault: true, frameId: "main" } },
+          });
+          return {};
+        }
+        if (method === "Page.addScriptToEvaluateOnNewDocument") {
+          onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
+            context: {
+              id: 2,
+              name: params.worldName,
+              auxData: { isDefault: false, frameId: "main" },
+            },
+          });
+          return { identifier: "takeover-watcher" };
+        }
+        if (method === "Runtime.evaluate" && params.expression === "this")
+          return {
+            result: { type: "object", className: "Window", objectId: `window-${params.contextId}` },
+          };
+        if (method === "DOMDebugger.getEventListeners")
+          return {
+            listeners:
+              params.objectId === "window-1"
+                ? existingCapture
+                  ? [{ type: "keydown", useCapture: true }]
+                  : []
+                : ownListenersRemoved
+                  ? []
+                  : [
+                      "keydown",
+                      "keyup",
+                      "pointerdown",
+                      "pointerup",
+                      "pointermove",
+                      "pointercancel",
+                      "wheel",
+                    ].map((type) => ({ type, useCapture: true })),
+          };
         if (method === "DOMSnapshot.captureSnapshot" && sensitiveValue)
           return {
             strings: ["main", tab.url, "INPUT", "type", "password", sensitiveValue],
@@ -168,6 +208,9 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
     code,
     session,
     cdpCalls,
+    removeOwnListeners: () => {
+      ownListenersRemoved = true;
+    },
     holdNextWrite: () => {
       holdNextWrite = true;
     },
@@ -187,16 +230,9 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
     humanInput: () => {
       const binding = cdpCalls.find((call) => call.method === "Runtime.addBinding");
       if (!binding) throw new Error("Takeover binding has not been installed");
-      onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
-        context: {
-          id: 123,
-          name: binding.params.executionContextName,
-          auxData: { isDefault: false },
-        },
-      });
       onEvent({ tabId: consentTab.id }, "Runtime.bindingCalled", {
         name: binding.params.name,
-        executionContextId: 123,
+        executionContextId: 2,
         payload: JSON.stringify({ type: "keydown", key: "x", modifiers: 0 }),
       });
     },
@@ -427,4 +463,42 @@ test("human input while Done is awaiting delivery preserves the new takeover pau
     error: { code: "paused" },
   });
   expect(h.cdpCalls).toHaveLength(before);
+});
+
+test("preexisting page capture handler refuses sharing before redemption and detaches", async () => {
+  const h = await setup(undefined, undefined, true);
+  expect(await h.share()).toEqual({
+    ok: false,
+    error: "This page prevents reliable takeover monitoring. Sharing is unavailable.",
+  });
+  expect(h.attached).toEqual([consentTab.id]);
+  expect(h.detached).toContain(consentTab.id);
+  expect(h.requests).toHaveLength(0);
+  expect(
+    h.cdpCalls.some(
+      (call) =>
+        call.method === "DOMDebugger.getEventListeners" && call.params.objectId === "window-1",
+    ),
+  ).toBe(true);
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false, starting: false });
+  expect((await h.session.status()).redeemed).toBe(false);
+});
+
+test("missing takeover listeners terminate sharing before the next screenshot without a lifecycle event", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  const before = h.cdpCalls.length;
+  h.removeOwnListeners();
+  await expect(
+    h.session.send("browser_take_screenshot", {}, { timeoutMs: 2000 }),
+  ).rejects.toMatchObject({ code: "session_not_active" });
+  await until(() => h.detached.includes(consentTab.id));
+  expect(
+    h.cdpCalls.slice(before).some((call) => call.method === "DOMDebugger.getEventListeners"),
+  ).toBe(true);
+  expect(
+    h.cdpCalls.slice(before).filter((call) => call.method === "Page.captureScreenshot"),
+  ).toHaveLength(0);
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false });
+  expect((await h.session.status()).state).toBe("stopped");
 });

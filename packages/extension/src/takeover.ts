@@ -24,11 +24,30 @@ interface Input {
 interface Target {
   parent?: string;
   contexts: Set<number>;
+  worlds: Map<number, { frame: string; ours: boolean; default: boolean }>;
+  audited: Set<number>;
   scriptId?: string;
 }
 interface Expected {
   input: Input;
   session: string;
+}
+const INPUT_TYPES = [
+  "keydown",
+  "keyup",
+  "pointerdown",
+  "pointerup",
+  "pointermove",
+  "pointercancel",
+  "wheel",
+];
+const UNAVAILABLE = "This page prevents reliable takeover monitoring. Sharing is unavailable.";
+export class TakeoverError extends Error {
+  readonly code = "takeover_unavailable";
+  constructor() {
+    super(UNAVAILABLE);
+    this.name = "TakeoverError";
+  }
 }
 
 // Only event metadata crosses the binding: never element text, values or DOM nodes.
@@ -118,6 +137,10 @@ export class TakeoverMonitor {
   private readonly cleanup = `__remoteTabCleanup_${crypto.randomUUID().replaceAll("-", "")}`;
   private readonly targets = new Map<string, Target>();
   private readonly expected = new Set<Expected>();
+  private readonly installing = new Set<Promise<void>>();
+  private failure?: TakeoverError;
+  private revision = 0;
+  private humanRevision = 0;
   private timestamp = 0;
   private disposed = false;
 
@@ -129,11 +152,35 @@ export class TakeoverMonitor {
   async initialize(): Promise<void> {
     if (this.disposed) throw new Error("Input monitor is disposed");
     if (this.targets.has("")) return;
-    await this.install("");
+    await this.startInstall("");
+    await this.ready();
+  }
+
+  private fail(): TakeoverError {
+    this.failure ??= new TakeoverError();
+    this.human();
+    return this.failure;
+  }
+
+  private human(): void {
+    this.humanRevision++;
+    this.onHuman();
+  }
+
+  private startInstall(session: string, parent?: string): Promise<void> {
+    const task = this.install(session, parent).catch(() => {
+      throw this.fail();
+    });
+    this.installing.add(task);
+    void task.then(
+      () => this.installing.delete(task),
+      () => this.installing.delete(task),
+    );
+    return task;
   }
 
   private async install(session: string, parent?: string): Promise<void> {
-    const target: Target = { parent, contexts: new Set() };
+    const target: Target = { parent, contexts: new Set(), worlds: new Map(), audited: new Set() };
     this.targets.set(session, target);
     const call = (method: string, params?: Record<string, unknown>) =>
       this.send(method, params, session || undefined);
@@ -147,12 +194,82 @@ export class TakeoverMonitor {
     });
     if (record(script) && typeof script.identifier === "string")
       target.scriptId = script.identifier;
+    else throw this.fail();
+    await this.audit(session, target);
     await call("Target.setAutoAttach", {
       autoAttach: true,
       waitForDebuggerOnStart: true,
       flatten: true,
       filter: [{ type: "iframe", exclude: false }, { exclude: true }],
     });
+  }
+
+  private async audit(session: string, target: Target): Promise<void> {
+    if (!target.contexts.size || ![...target.worlds.values()].some((world) => world.default))
+      throw this.fail();
+    const frames = new Set([...target.worlds.values()].map((world) => world.frame));
+    for (const frame of frames) {
+      const worlds = [...target.worlds.values()].filter((world) => world.frame === frame);
+      if (!worlds.some((world) => world.ours) || !worlds.some((world) => world.default))
+        throw this.fail();
+    }
+    for (const [id, world] of target.worlds) {
+      // document.open() can remove listeners without replacing execution contexts.
+      // Recheck our listener integrity before every operation, not only admission.
+      if (target.audited.has(id) && !world.ours) continue;
+      // Top-level `this` is the actual Window even if the page replaces window/globalThis.
+      const window = await this.send(
+        "Runtime.evaluate",
+        { expression: "this", contextId: id },
+        session || undefined,
+      );
+      if (
+        !record(window) ||
+        !record(window.result) ||
+        window.result.className !== "Window" ||
+        typeof window.result.objectId !== "string"
+      )
+        throw this.fail();
+      const objectId = window.result.objectId;
+      try {
+        const result = await this.send(
+          "DOMDebugger.getEventListeners",
+          { objectId },
+          session || undefined,
+        );
+        if (!record(result) || !Array.isArray(result.listeners)) throw this.fail();
+        const types = new Set<string>();
+        for (const listener of result.listeners) {
+          if (
+            !record(listener) ||
+            typeof listener.type !== "string" ||
+            typeof listener.useCapture !== "boolean"
+          )
+            throw this.fail();
+          if (!INPUT_TYPES.includes(listener.type) || !listener.useCapture) continue;
+          if (!world.ours) throw this.fail();
+          types.add(listener.type);
+        }
+        if (world.ours && INPUT_TYPES.some((type) => !types.has(type))) throw this.fail();
+        target.audited.add(id);
+      } finally {
+        await this.send("Runtime.releaseObject", { objectId }, session || undefined).catch(
+          () => {},
+        );
+      }
+    }
+  }
+
+  private async ready(): Promise<void> {
+    if (this.failure) throw this.failure;
+    while (this.installing.size) await Promise.all(this.installing);
+    // A page that keeps replacing worlds cannot race admission with an unchecked world.
+    for (let pass = 0; pass < 3; pass++) {
+      const revision = this.revision;
+      for (const [session, target] of this.targets) await this.audit(session, target);
+      if (revision === this.revision) return;
+    }
+    throw this.fail();
   }
 
   private forget(session: string): void {
@@ -170,6 +287,7 @@ export class TakeoverMonitor {
     const session = sessionId ?? "";
     const target = this.targets.get(session);
     if (!target) return;
+    if (method === "Page.documentOpened") throw this.fail();
     if (method === "Target.attachedToTarget") {
       if (
         !record(params.targetInfo) ||
@@ -178,7 +296,7 @@ export class TakeoverMonitor {
         this.targets.has(params.sessionId)
       )
         return;
-      await this.install(params.sessionId, session);
+      await this.startInstall(params.sessionId, session);
       if (params.waitingForDebugger === true)
         await this.send("Runtime.runIfWaitingForDebugger", {}, params.sessionId);
       return;
@@ -190,22 +308,39 @@ export class TakeoverMonitor {
     if (method === "Runtime.executionContextCreated") {
       const context = params.context;
       if (
-        record(context) &&
-        context.name === this.world &&
-        typeof context.id === "number" &&
-        record(context.auxData) &&
-        context.auxData.isDefault === false
+        !record(context) ||
+        typeof context.id !== "number" ||
+        typeof context.name !== "string" ||
+        !record(context.auxData) ||
+        typeof context.auxData.isDefault !== "boolean" ||
+        typeof context.auxData.frameId !== "string"
       )
-        target.contexts.add(context.id);
+        throw this.fail();
+      const ours = context.name === this.world && context.auxData.isDefault === false;
+      target.worlds.set(context.id, {
+        frame: context.auxData.frameId,
+        ours,
+        default: context.auxData.isDefault,
+      });
+      target.audited.delete(context.id);
+      this.revision++;
+      if (ours) target.contexts.add(context.id);
       return;
     }
     if (
       method === "Runtime.executionContextsCleared" ||
       method === "Runtime.executionContextDestroyed"
     ) {
-      if (method === "Runtime.executionContextsCleared") target.contexts.clear();
-      else if (typeof params.executionContextId === "number")
+      this.revision++;
+      if (method === "Runtime.executionContextsCleared") {
+        target.contexts.clear();
+        target.worlds.clear();
+        target.audited.clear();
+      } else if (typeof params.executionContextId === "number") {
         target.contexts.delete(params.executionContextId);
+        target.worlds.delete(params.executionContextId);
+        target.audited.delete(params.executionContextId);
+      }
       for (const event of this.expected) if (event.session === session) this.expected.delete(event);
       return;
     }
@@ -221,11 +356,11 @@ export class TakeoverMonitor {
     try {
       input = JSON.parse(params.payload);
     } catch {
-      this.onHuman();
+      this.human();
       return;
     }
     if (!record(input)) {
-      this.onHuman();
+      this.human();
       return;
     }
     for (const event of this.expected) {
@@ -234,14 +369,23 @@ export class TakeoverMonitor {
         this.expected.delete(event);
         continue;
       }
-      if (event.session !== session) continue;
-      if (Object.entries(event.input).every(([key, value]) => input[key] === value)) {
+      let recipient: string | undefined = session;
+      while (recipient !== undefined && recipient !== event.session)
+        recipient = this.targets.get(recipient)?.parent;
+      if (recipient !== event.session) continue;
+      // CDP coordinates use the dispatch target viewport; DOM coordinates are frame-local.
+      // The unique still-future trusted timestamp identifies the exact event across frames.
+      if (
+        Object.entries(event.input).every(
+          ([key, value]) => key === "x" || key === "y" || input[key] === value,
+        )
+      ) {
         this.expected.delete(event);
         return;
       }
     }
     // Synchronous notification: the caller can pause before another command is dispatched.
-    this.onHuman();
+    this.human();
   }
 
   async dispatch(
@@ -250,6 +394,14 @@ export class TakeoverMonitor {
     sessionId?: string,
   ): Promise<unknown> {
     if (this.disposed) throw new Error("Input monitor is disposed");
+    const humanRevision = this.humanRevision;
+    try {
+      await this.ready();
+    } catch {
+      throw this.fail();
+    }
+    if (this.disposed) throw new Error("Input monitor is disposed");
+    if (humanRevision !== this.humanRevision) throw new Error("Paused: you took over");
     const input = expectedInput(method, params);
     if (input) {
       this.timestamp = Math.max(Date.now() + 1000, this.timestamp + 1);

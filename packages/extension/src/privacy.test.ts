@@ -102,6 +102,15 @@ function fixture(fields: Field[] = [password]) {
 }
 
 describe("privacy guard", () => {
+  test("Chromium empty-string sentinel still latches an empty protected input", async () => {
+    const f = fixture([{ ...password, value: "" }]);
+    f.state.snapshot.documents[0].nodes.inputValue.value[0] = -1;
+    await f.privacy.scan();
+    expect(f.privacy.hasSensitive).toBe(true);
+    await expect(f.driver.execute("browser_console_messages")).rejects.toMatchObject({
+      code: "privacy_denied",
+    });
+  });
   test("classifies password, tokenized autocomplete OTP/cc fields including closed shadow data", async () => {
     const f = fixture([
       password,
@@ -122,7 +131,7 @@ describe("privacy guard", () => {
     await f.privacy.scan();
     f.state.snapshot = snapshot([]);
     await f.privacy.scan();
-    expect(f.privacy.hasSensitive).toBe(false);
+    expect(f.privacy.hasSensitive).toBe(true);
     expect(
       f.privacy.sanitize({ "secret a/+": ["secret%20a%2F%2B", btoa("secret a/+"), "ordinary"] }),
     ).toEqual({ "[redacted]": ["[redacted]", "[redacted]", "ordinary"] });
@@ -272,14 +281,12 @@ describe("privacy guard", () => {
       expect(typed.result).toEqual({ typed: true });
       expect(typed.screenshot).toEqual(new TextEncoder().encode("masked pixels"));
       await f.driver.onEvent("Runtime.consoleAPICalled", { type: "log", args: [{ value }] });
-      expect((await f.driver.execute("browser_console_messages")).result).toEqual({
-        entries: [{ level: "log", args: ["[redacted]"] }],
-        truncated: false,
-        dropped: 0,
+      await expect(f.driver.execute("browser_console_messages")).rejects.toMatchObject({
+        code: "privacy_denied",
       });
     },
   );
-  test("values first discovered during screenshot are scrubbed before serializing the result", async () => {
+  test("protected content first discovered during screenshot withholds the evaluation result", async () => {
     const f = fixture([]);
     f.state.hook = async (method) => {
       if (method === "Runtime.evaluate") return { result: { value: "late-secret" } };
@@ -287,8 +294,9 @@ describe("privacy guard", () => {
         f.state.snapshot = snapshot([{ ...password, value: "late-secret", hidden: true }]);
       return undefined;
     };
-    const output = await f.driver.execute("browser_evaluate", { function: "() => 'late-secret'" });
-    expect(output.result).toBe("[redacted]");
+    await expect(
+      f.driver.execute("browser_evaluate", { function: "() => 'late-secret'" }),
+    ).rejects.toMatchObject({ code: "privacy_denied" });
   });
   test("driver denies full evaluation with sensitive fields and allows it without them", async () => {
     const f = fixture();
@@ -300,9 +308,13 @@ describe("privacy guard", () => {
     ).rejects.toMatchObject({ code: "privacy_denied" });
     expect(f.calls.some((call) => call.method === "Runtime.evaluate")).toBe(false);
     f.state.snapshot = snapshot([]);
-    expect((await f.driver.execute("browser_evaluate", { function: "() => 1" })).result).toBe(
-      "ordinary result",
-    );
+    await expect(
+      f.driver.execute("browser_evaluate", { function: "() => 1" }),
+    ).rejects.toMatchObject({ code: "privacy_denied" });
+    const ordinary = fixture([]);
+    expect(
+      (await ordinary.driver.execute("browser_evaluate", { function: "() => 1" })).result,
+    ).toBe("ordinary result");
   });
   test("remembers typed sensitive values before a page immediately clears the input", async () => {
     const f = fixture();
@@ -316,23 +328,23 @@ describe("privacy guard", () => {
     await f.driver.execute("browser_type", { ref: "e1", text: "new-password" });
     expect(f.privacy.sanitize("new-password")).toBe("[redacted]");
   });
-  test("console/network known values and oversized fragments never appear in results", async () => {
-    const f = fixture();
+  test("never-sensitive pages retain diagnostics with bounded strings and credential redaction", async () => {
+    const f = fixture([]);
     await f.driver.initialize();
     await f.driver.onEvent("Runtime.consoleAPICalled", {
       type: "log",
-      args: [{ value: "sword-fish" }, { value: "new-unknown".repeat(1000) }],
+      args: [{ value: "ordinary log" }, { value: "new-unknown".repeat(1000) }],
     });
     await f.driver.onEvent("Network.requestWillBeSent", {
       requestId: "n1",
       request: {
-        url: "https://example.com/?echo=sword-fish",
+        url: "https://example.com/ordinary",
         method: "GET",
-        headers: { Echo: "sword-fish" },
+        headers: { Authorization: "sword-fish" },
       },
     });
-    expect(JSON.stringify(await f.driver.execute("browser_console_messages"))).not.toContain(
-      "sword-fish",
+    expect(JSON.stringify(await f.driver.execute("browser_console_messages"))).toContain(
+      "ordinary log",
     );
     expect(JSON.stringify(await f.driver.execute("browser_console_messages"))).not.toContain(
       "new-unknown",
@@ -371,22 +383,50 @@ describe("privacy guard", () => {
     await expect(f.driver.execute("browser_snapshot")).rejects.toMatchObject({ code: "paused" });
     f.state.snapshot = snapshot([{ attrs: { autocomplete: "one-time-code" }, value: "" }]);
     f.driver.setPaused(false);
-    expect((await f.driver.execute("browser_console_messages")).result).toEqual({
-      entries: [],
-      truncated: false,
-      dropped: 0,
-    });
-    expect((await f.driver.execute("browser_network_requests")).result).toEqual({
-      entries: [],
-      truncated: false,
-      dropped: 0,
-    });
+    for (const tool of ["browser_console_messages", "browser_network_requests"])
+      await expect(f.driver.execute(tool)).rejects.toMatchObject({ code: "privacy_denied" });
+    expect(JSON.stringify(f.driver)).not.toContain("654321");
+  });
+  test("unknown protected values logged and cleared between scans are never retained, even without pause", async () => {
+    const f = fixture([{ ...password, value: "" }]);
+    await f.driver.initialize();
     await f.driver.onEvent("Runtime.consoleAPICalled", {
       type: "log",
-      args: [{ value: "safe resumed log" }],
+      args: [{ value: "FAKE-PRIVATE-123" }],
     });
-    expect(JSON.stringify(await f.driver.execute("browser_console_messages"))).toContain(
-      "safe resumed log",
-    );
+    await f.driver.onEvent("Network.requestWillBeSent", {
+      requestId: "n",
+      request: {
+        method: "GET",
+        url: "https://example.com/?secret=FAKE-PRIVATE-123",
+        headers: { Echo: "FAKE-PRIVATE-123" },
+      },
+    });
+    expect(JSON.stringify(f.driver)).not.toContain("FAKE-PRIVATE-123");
+    f.state.snapshot = snapshot([]);
+    await f.driver.onEvent("Page.frameNavigated", {
+      frame: { id: "f1", url: "https://example.com/next" },
+    });
+    await f.driver.onEvent("Page.lifecycleEvent", {
+      frameId: "f1",
+      loaderId: "next",
+      name: "load",
+    });
+    for (const tool of ["browser_console_messages", "browser_network_requests", "browser_evaluate"])
+      await expect(f.driver.execute(tool, { function: "() => 1" })).rejects.toMatchObject({
+        code: "privacy_denied",
+      });
+  });
+  test("encountering protected content clears diagnostic payloads collected earlier", async () => {
+    const f = fixture([]);
+    await f.driver.initialize();
+    await f.driver.onEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ value: "old diagnostic payload" }],
+    });
+    expect(JSON.stringify(f.driver)).toContain("old diagnostic payload");
+    f.state.snapshot = snapshot([{ ...password, value: "" }]);
+    await f.driver.execute("browser_snapshot");
+    expect(JSON.stringify(f.driver)).not.toContain("old diagnostic payload");
   });
 });

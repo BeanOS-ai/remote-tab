@@ -306,7 +306,13 @@ Behaviour:
 - **Pause on human input.** Any keyboard or pointer input in the shared tab
   flips the session to paused; queued commands return `paused`; the human
   clicks Resume. Monitoring runs in isolated worlds, including child frames;
-  page-script events do not trigger it. Only the exact input events dispatched
+  page-script events do not trigger it. Before admitting a loaded document,
+  the extension inspects every frame execution world and refuses sharing if
+  existing window capture handlers could suppress its listener. Unknown or
+  failed inspection ends sharing; pages are never reloaded automatically.
+  The monitor also rechecks its own listeners before operations and ends
+  sharing if a same-context document replacement removes them.
+  Later page listeners cannot run before the installed monitor. Only the exact input events dispatched
   by the current automation call are excluded. An interrupted command returns
   `paused` even if Resume is clicked before it finishes, without uploading its
   result or screenshot. A handoff must be completed with Done, not Resume.
@@ -324,8 +330,11 @@ Behaviour:
   the volatile dictionary is bounded and fails closed. Screenshots are masked
   locally and discarded if field geometry changes during capture. Embedded
   frames are masked in full. Full-mode evaluation returns `privacy_denied`
-  while sensitive fields or uninspected embedded content are present, because
-  arbitrary script could encode their values around text redaction. Privacy
+  for the remainder of a share once sensitive fields or uninspected embedded
+  content have been observed, because arbitrary script could encode retained
+  values around text redaction. Console and network inspection also return
+  `privacy_denied` for the rest of such a share, and buffered diagnostics are
+  discarded. This protects values entered and cleared between scans. Privacy
   inspection failures also fail closed.
 - Action summaries omit field values and arguments. Extend uses only the
   browser credential, adds 30 minutes, and cannot exceed the 60-minute cap.
