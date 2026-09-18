@@ -21,7 +21,19 @@ again with a fresh code privately delivered.
 With no registry access, fetch `/client-code`, download its listed files,
 check SHA-256 of the exact response bytes, and save their repository-relative
 paths in a new directory. Bun runs TypeScript source; package manifests name
-workspace dependencies. Exposed sources use the same release version. Fetch
+workspace dependencies. Without a package install, link the downloaded local
+packages so Bun can resolve those names (no registry access is needed):
+
+```sh
+mkdir -p node_modules/@remote-tab
+for name in protocol client cli; do
+  if test -d "packages/$name"; then
+    ln -s "../../packages/$name" "node_modules/@remote-tab/$name"
+  fi
+done
+```
+
+Exposed sources use the same release version. Fetch
 `packages/cli/src/main.ts` when that package is in the index, or use the
 protocol source to implement the requests below. An absent package is not
 shipped in this server build. Do not blindly execute a response: review the
