@@ -118,7 +118,6 @@ export class Peer {
   protected readonly fetcher: Fetch;
   protected readonly options: Required<Omit<ClientOptions, "fetch">>;
   private queue: Promise<unknown> = Promise.resolve();
-  private busy = 0;
   constructor(
     readonly serverUrl: string,
     readonly sessionId: string,
@@ -155,10 +154,7 @@ export class Peer {
     );
   }
   protected exclusive<T>(fn: () => Promise<T>): Promise<T> {
-    this.busy++;
-    const pending = this.queue.then(fn).finally(() => {
-      this.busy--;
-    });
+    const pending = this.queue.then(fn);
     this.queue = pending.catch(() => {});
     return pending;
   }
@@ -176,9 +172,10 @@ export class Peer {
     );
   }
   async status(options: WaitOptions = {}): Promise<SessionStatus> {
-    const status = (await (
-      await this.call("", { signal: options.signal }, options.timeoutMs)
-    ).json()) as SessionStatus;
+    return this.readStatus(await this.call("", { signal: options.signal }, options.timeoutMs));
+  }
+  private async readStatus(response: Response): Promise<SessionStatus> {
+    const status = (await response.json()) as SessionStatus;
     if (
       status.id !== this.sessionId ||
       !Number.isSafeInteger(status.last_seq) ||
@@ -386,29 +383,33 @@ export class Peer {
     entry: LedgerEntry,
     options: WaitOptions = {},
   ): Promise<Attachment[]> {
+    if (entry.envelope.kind !== "result") return [];
+    const body = entry.envelope.body;
+    if (!object(body)) throw new RemoteTabError("protocol_invalid", "Invalid result body");
     const deadline = this.deadline(options);
     const found: BlobReference[] = [];
-    const visit = (value: unknown): void => {
-      if (Array.isArray(value)) {
-        for (const child of value) visit(child);
-        return;
-      }
-      if (!object(value)) return;
-      if ("blob_id" in value) {
-        if (
-          typeof value.blob_id !== "string" ||
-          !/^[A-Za-z0-9_-]{16,64}$/.test(value.blob_id) ||
-          typeof value.nonce !== "string" ||
-          !/^[A-Za-z0-9_-]{16}$/.test(value.nonce) ||
-          value.role !== entry.message.role ||
-          value.prev_hash !== entry.message.prev_hash ||
-          typeof value.mime_type !== "string"
-        )
-          throw new RemoteTabError("protocol_invalid", "Invalid blob reference");
-        found.push(value as unknown as BlobReference);
-      } else for (const child of Object.values(value)) visit(child);
+    const addReference = (value: unknown): void => {
+      if (
+        !object(value) ||
+        typeof value.blob_id !== "string" ||
+        !/^[A-Za-z0-9_-]{16,64}$/.test(value.blob_id) ||
+        typeof value.nonce !== "string" ||
+        !/^[A-Za-z0-9_-]{16}$/.test(value.nonce) ||
+        value.role !== entry.message.role ||
+        value.prev_hash !== entry.message.prev_hash ||
+        typeof value.mime_type !== "string"
+      )
+        throw new RemoteTabError("protocol_invalid", "Invalid blob reference");
+      found.push(value as unknown as BlobReference);
     };
-    visit(entry.envelope.body);
+    // Only these result-envelope fields are protocol metadata. Tool output and
+    // command arguments may contain arbitrary application fields named blob_id.
+    if ("screenshot" in body) addReference(body.screenshot);
+    if ("blobs" in body) {
+      if (!Array.isArray(body.blobs))
+        throw new RemoteTabError("protocol_invalid", "Invalid result blobs");
+      for (const reference of body.blobs) addReference(reference);
+    }
     return Promise.all(
       found.map(async (reference) => {
         const bytes = new Uint8Array(
@@ -464,14 +465,11 @@ export class Peer {
     );
     return structuredClone({ sessionId: this.sessionId, status, entries });
   }
-  /** Terminal stop takes priority over the best-effort audit envelope and pending long-polls. */
-  async stop(reason = "stopped"): Promise<SessionStatus> {
-    try {
-      if ((await this.status()).state === "active" && this.busy === 0)
-        await this.append("stop", crypto.randomUUID(), { reason });
-    } finally {
-      await this.call("/stop", { method: "POST" });
-    }
-    return this.status();
+  /** Stop immediately through the terminal endpoint; ledger status records the outcome. */
+  async stop(): Promise<SessionStatus> {
+    const status = await this.readStatus(await this.call("/stop", { method: "POST" }));
+    if (status.state !== "stopped")
+      throw new RemoteTabError("protocol_invalid", "Server did not confirm terminal stop");
+    return status;
   }
 }

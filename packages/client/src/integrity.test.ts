@@ -184,10 +184,10 @@ test("fresh ledger reads every page after the 200-message server boundary", asyn
   await p.session.stop();
   const resumed = AgentSession.resume(p.session.exportState(), p.options);
   const ledger = await resumed.ledger();
-  expect(ledger.entries).toHaveLength(206);
+  expect(ledger.entries).toHaveLength(205);
   expect(ledger.entries.map((entry) => entry.message.seq)).toEqual(
-    Array.from({ length: 206 }, (_, i) => i + 1),
+    Array.from({ length: 205 }, (_, i) => i + 1),
   );
-  expect(ledger.entries.at(-1)?.envelope.kind).toBe("stop");
+  expect(ledger.entries.at(-1)?.envelope.kind).toBe("result");
   expect(ledger.status.state).toBe("stopped");
 }, 15000);

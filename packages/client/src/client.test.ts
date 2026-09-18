@@ -111,7 +111,6 @@ describe("client lifecycle", () => {
       "result",
       "handoff",
       "handoff_done",
-      "stop",
     ]);
     expect(ledger.entries[2].attachments.map((a) => a.bytes)).toEqual([png, snapshot]);
     expect((await browser.ledger()).entries).toEqual(ledger.entries);
@@ -402,6 +401,24 @@ test("stop bypasses a pending long-poll and terminates both waiters promptly", a
   expect((await session.stop()).state).toBe("stopped");
   expect(Date.now() - started).toBeLessThan(500);
   expect(await observed).toMatchObject({ code: "session_not_active" });
+});
+
+test("idle stop never waits for message persistence or additional status reads", async () => {
+  const { session, fetch } = await pair();
+  const requests: string[] = [];
+  const resumed = AgentSession.resume(session.exportState(), {
+    requestTimeoutMs: 150,
+    fetch: async (request) => {
+      requests.push(`${request.method} ${new URL(request.url).pathname}`);
+      if (!new URL(request.url).pathname.endsWith("/stop")) return new Promise<Response>(() => {});
+      return fetch(request);
+    },
+  });
+  const started = Date.now();
+  expect((await resumed.stop()).state).toBe("stopped");
+  expect(Date.now() - started).toBeLessThan(100);
+  expect(requests).toEqual([`POST /v1/sessions/${session.sessionId}/stop`]);
+  expect((await session.status()).state).toBe("stopped");
 });
 
 test("abort interrupts the actual server long-poll", async () => {

@@ -82,6 +82,8 @@ data. A decryptable hello proves possession of the code, not human identity.
 If the human reports `already_redeemed`, stop and create a new session with a
 new privately delivered code. A redeemer unable to produce an authenticated
 hello is reported as `hijack_suspected` and the client stops the session.
+`stop()` goes directly to the terminal API; the exported ledger records the
+stopped state in its status without requiring another encrypted message.
 
 `BrowserPeer` supplies the same encrypted transport to installed browser
 clients and fake tabs in tests. It does not implement browser automation,

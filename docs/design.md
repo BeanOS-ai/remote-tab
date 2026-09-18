@@ -320,6 +320,9 @@ verify every read, including their own echoed appends. The client retries a
 stale-chain append once, after verifying the new chain and resealing with a
 fresh nonce. Ledger reads verify from genesis and fetch/decrypt referenced
 blobs, including after stop or expiry.
+`stop()` calls the terminal endpoint directly, without waiting for an encrypted
+audit append or a pending poll. The ledger's status records the stopped state;
+an encrypted `stop` message is not required for shutdown.
 
 Client waits default to 120 seconds and accept a timeout and abort signal.
 After observing redemption, the client allows 10 seconds for an authenticated
