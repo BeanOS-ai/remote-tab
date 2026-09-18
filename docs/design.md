@@ -281,8 +281,9 @@ Evolves the published **Bean Tab Share** 1.1.2 (same Web Store listing, new
 major version) rather than a second listing. Manifest v3; permissions `tabs`,
 `scripting`, `storage`, `debugger`; host permission for the server origin only. `REMOTE_TAB_SERVER_ORIGIN` is a
 build-time distribution setting, compiled into both the worker and manifest; the
-repository default is `https://remote-tab.example`. Chrome 118 or newer is
-required: its active debugger session keeps the MV3 service worker alive.
+repository default is `https://remote-tab.example`. Chrome 125 or newer is
+required for flattened debugger child-frame sessions. The active debugger
+session keeps the MV3 service worker alive.
 Session secrets stay only in memory. Browser restart or debugger loss ends
 local control; there is no automatic resume or command replay. The human
 must start a fresh share after a restart. Built artifacts are ignored.
@@ -308,11 +309,40 @@ Behaviour:
   reported to the agent as `scope_denied`, and shown to the human.
 - **Pause on human input.** Any keyboard or pointer input in the shared tab
   flips the session to paused; queued commands return `paused`; the human
-  clicks Resume. This avoids the agent and the human fighting over a form.
+  clicks Resume. Monitoring runs in isolated worlds, including child frames;
+  page-script events do not trigger it. Before admitting a loaded document,
+  the extension inspects every frame execution world and refuses sharing if
+  existing window capture handlers could suppress its listener. Unknown or
+  failed inspection ends sharing; pages are never reloaded automatically.
+  The monitor also rechecks its own listeners before operations and ends
+  sharing if a same-context document replacement removes them.
+  Later page listeners cannot run before the installed monitor. Only the exact input events dispatched
+  by the current automation call are excluded. An interrupted command returns
+  `paused` even if Resume is clicked before it finishes, without uploading its
+  result or screenshot. A handoff must be completed with Done, not Resume.
+  Diagnostic buffers are cleared on pause and events are not collected while
+  paused, so human-entered credentials cannot remain in delayed console/network
+  results after a field clears itself. Automation input uses a unique timestamp
+  one second ahead to distinguish delayed CDP event delivery; only an exact
+  match received before that timestamp is excluded. Page handlers therefore see
+  adjusted timestamps for automated input; late events pause safely.
 - **Redaction, kept simple.** Values of inputs whose type is `password`, or
   whose `autocomplete` is `one-time-code` or `cc-*`, are never included in
   snapshots or results, and those elements are masked in screenshots. No
-  configurable rules in v1.
+  configurable rules in v1. DOM snapshots include closed shadow roots. Known
+  sensitive values are scrubbed from outgoing data for the rest of the share;
+  the volatile dictionary is bounded and fails closed. Screenshots are masked
+  locally and discarded if field geometry changes during capture. Embedded
+  frames are masked in full. Full-mode evaluation returns `privacy_denied`
+  for the remainder of a share once sensitive fields or uninspected embedded
+  content have been observed, because arbitrary script could encode retained
+  values around text redaction. Console and network inspection also return
+  `privacy_denied` for the rest of such a share, and buffered diagnostics are
+  discarded. This protects values entered and cleared between scans. Privacy
+  inspection failures also fail closed.
+- Action summaries omit field values and arguments. Extend uses only the
+  browser credential, adds 30 minutes, and cannot exceed the 60-minute cap.
+  Stop is terminal and detaches locally before waiting for a network response.
 - Page content is untrusted. The extension never executes anything from the
   page; the agent is told (in the tool descriptions) that snapshot text is
   data, not instructions.

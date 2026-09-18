@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Remote Tab</title><link rel="stylesheet" href="style.css"></head>
-<body><h1>Remote Tab</h1><p id="tab"></p>
+<body><header><h1>Remote Tab</h1><button id="stop" type="button" disabled>Stop</button></header><p id="tab"></p>
 <form id="consent"><label for="code">Private code from your agent</label><input id="code" type="password" placeholder="rt1.…" autocomplete="off" spellcheck="false" required>
 <fieldset><legend>What may your agent do?</legend>
 <label><input type="radio" name="mode" value="read" checked> Read-only</label>
@@ -8,5 +8,10 @@
 <label><input type="radio" name="mode" value="full"> Full — scripting access</label></fieldset>
 <label><input type="checkbox" id="site" checked> This site only</label>
 <button id="share" type="submit">Share this tab</button></form>
-<section id="live" hidden><p id="state"></p><button id="stop" type="button">Stop</button><p>Chrome’s “is debugging this browser” bar means Remote Tab controls this shared tab. Stop detaches it.</p></section>
+<section id="live" hidden><p id="state"></p><p id="expiry"></p><button id="extend" type="button" hidden>Extend 30 minutes</button>
+<aside id="handoff" hidden><strong>Your turn</strong><p id="handoff-message"></p><button id="done" type="button">Done</button></aside>
+<aside id="paused" hidden><p>Paused: you took over</p><button id="resume" type="button">Resume</button></aside>
+<h2>Activity</h2><ol id="feed" aria-live="polite"></ol>
+<p>Chrome’s “is debugging this browser” bar means Remote Tab controls this shared tab. Stop detaches it. Sharing also ends if you dismiss Chrome’s bar.</p>
+<p>Password, one-time-code and payment fields are private. After protected fields are encountered, scripting and console/network inspection stay unavailable for this share.</p></section>
 <p id="error" role="status"></p><script src="popup.js" type="module"></script></body></html>

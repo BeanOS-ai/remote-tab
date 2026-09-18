@@ -32,14 +32,18 @@ export interface ChromeApi {
     attach(target: { tabId: number }, version: string): Promise<void>;
     detach(target: { tabId: number }): Promise<void>;
     sendCommand(
-      target: { tabId: number },
+      target: { tabId: number; sessionId?: string },
       method: string,
       params?: Record<string, unknown>,
     ): Promise<unknown>;
     onEvent: Event<
-      (target: { tabId?: number }, method: string, params?: Record<string, unknown>) => void
+      (
+        target: { tabId?: number; sessionId?: string },
+        method: string,
+        params?: Record<string, unknown>,
+      ) => void
     >;
-    onDetach: Event<(target: { tabId?: number }, reason: string) => void>;
+    onDetach: Event<(target: { tabId?: number; sessionId?: string }, reason: string) => void>;
   };
 }
 declare global {

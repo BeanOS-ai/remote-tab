@@ -43,7 +43,7 @@ export async function buildExtension(
         manifest_version: 3,
         name: "Remote Tab",
         version: "2.0.0",
-        minimum_chrome_version: "118",
+        minimum_chrome_version: "125",
         description:
           "Share one tab with your agent. You control the mode, site scope, and when sharing stops.",
         permissions: ["tabs", "scripting", "storage", "debugger"],

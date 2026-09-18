@@ -1,9 +1,11 @@
 import { RemoteTabError } from "@remote-tab/client";
 import { parseCode } from "@remote-tab/protocol";
 import { type Sender, record } from "./chrome";
-import { TabDriver } from "./driver";
+import { DriverError, TabDriver } from "./driver";
+import { PrivacyGuard } from "./privacy";
 import { siteForUrl } from "./scope";
 import { SharedSession } from "./session";
+import { TakeoverError, TakeoverMonitor } from "./takeover";
 
 let active: SharedSession | undefined;
 let tabId: number | undefined;
@@ -13,6 +15,7 @@ function cancelStart() {
   if (attempt) attempt.cancelled = true;
 }
 let driver: TabDriver | undefined;
+let monitor: TakeoverMonitor | undefined;
 function trusted(sender: Sender) {
   return sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("popup.html");
 }
@@ -24,12 +27,27 @@ async function handle(message: unknown) {
       active.state.url = tab.url;
       active.state.title = tab.title;
     }
-    return active?.state ?? { sharing: false };
+    return { ...(active?.state ?? { sharing: false }), starting };
   }
   if (message.action === "stop") {
     cancelStart();
     if (starting && tabId !== undefined) await chrome.debugger.detach({ tabId }).catch(() => {});
     await active?.stop();
+    return { ok: true };
+  }
+  if (["resume", "done", "extend"].includes(String(message.action))) {
+    if (!active?.state.sharing) throw new Error("Sharing has ended");
+    if (message.action === "resume") active.resume();
+    if (message.action === "done") await active.done();
+    if (message.action === "extend") {
+      try {
+        await active.extend();
+      } catch (error) {
+        if (error instanceof RemoteTabError && error.code === "ttl_exceeded")
+          throw new Error("This share has reached its 60-minute limit");
+        throw error;
+      }
+    }
     return { ok: true };
   }
   if (message.action !== "share") throw new Error("Unknown request");
@@ -48,10 +66,12 @@ async function handle(message: unknown) {
   )
     throw new Error("Reopen the popup to choose a tab");
   starting = true;
-  const pending = { cancelled: false };
+  const pending = { cancelled: false, paused: false };
   attempt = pending;
   let attached = false;
   let selectedId: number | undefined;
+  let boundShare: SharedSession | undefined;
+  let newMonitor: TakeoverMonitor | undefined;
   try {
     const tab = await chrome.tabs.get(message.tabId);
     if (tab.id !== message.tabId || tab.url !== message.url)
@@ -65,32 +85,66 @@ async function handle(message: unknown) {
     tabId = selectedId;
     await chrome.debugger.attach(target, "1.3");
     attached = true;
-    const newDriver = new TabDriver(
-      (method, params) => {
-        if (pending.cancelled) throw new Error("Sharing cancelled");
-        return chrome.debugger.sendCommand(target, method, params);
+    const rawCdp = (method: string, params?: Record<string, unknown>, sessionId?: string) =>
+      chrome.debugger.sendCommand(
+        { ...target, ...(sessionId ? { sessionId } : {}) },
+        method,
+        params,
+      );
+    const takeover = new TakeoverMonitor(rawCdp, () => {
+      pending.paused = true;
+      boundShare?.pause();
+    });
+    newMonitor = takeover;
+    monitor = takeover;
+    await takeover.initialize();
+    const cdp = (method: string, params?: Record<string, unknown>) => {
+      if (pending.cancelled || boundShare?.state.sharing === false)
+        throw new DriverError("stopped", "Sharing stopped");
+      // Scope interception must continue while the human browses during a pause.
+      const maintenance = [
+        "Fetch.continueRequest",
+        "Fetch.failRequest",
+        "Page.handleJavaScriptDialog",
+        "Page.stopLoading",
+      ].includes(method);
+      if (boundShare?.interrupted && !maintenance)
+        throw new DriverError("paused", "Paused: you took over");
+      // These lifecycle barriers also run between old and new document worlds.
+      if (maintenance) return rawCdp(method, params);
+      return takeover.dispatch(method, params).catch((error) => {
+        if (error instanceof TakeoverError) {
+          pending.cancelled = true;
+          if (boundShare) boundShare.state.notice = error.message;
+          void boundShare?.stop();
+        }
+        throw error;
+      });
+    };
+    const privacy = new PrivacyGuard(cdp);
+    await privacy.scan();
+    const newDriver = new TabDriver(cdp, {
+      privacy,
+      mode,
+      scope,
+      url: tab.url,
+      title: tab.title ?? "",
+      onNotice: (notice: { code: string; message: string }) => {
+        if (active) active.state.notice = notice.message;
+        if (notice.code === "scope_lost") {
+          cancelStart();
+          void active?.stop();
+        }
       },
-      {
-        mode,
-        scope,
-        url: tab.url,
-        title: tab.title ?? "",
-        onNotice: (notice: { code: string; message: string }) => {
-          if (active) active.state.notice = notice.message;
-          if (notice.code === "scope_lost") {
-            cancelStart();
-            void active?.stop();
-          }
-        },
-      },
-    );
+    });
     driver = newDriver;
     await newDriver.initialize();
     const current = await chrome.tabs.get(selectedId);
     if (current.url !== tab.url)
       throw new Error("The tab changed while sharing started. Try again.");
     if (pending.cancelled) throw new Error("Sharing cancelled");
-    active = await SharedSession.connect({
+    boundShare = await SharedSession.connect({
+      isPaused: () => pending.paused,
       isCancelled: () => pending.cancelled,
       code: message.code,
       serverUrl: REMOTE_TAB_SERVER_ORIGIN,
@@ -98,14 +152,19 @@ async function handle(message: unknown) {
       hello: {
         mode,
         scope,
-        url: tab.url,
-        title: tab.title,
+        url: privacy.sanitize(tab.url) as string,
+        title: privacy.sanitize(tab.title ?? "") as string,
         extension_version: chrome.runtime.getManifest().version,
       },
-      detach: () => chrome.debugger.detach(target),
+      detach: async () => {
+        void takeover.dispose();
+        await chrome.debugger.detach(target);
+      },
     });
+    active = boundShare;
     return { ok: true };
   } catch (error) {
+    void newMonitor?.dispose();
     if (attached && selectedId !== undefined)
       await chrome.debugger.detach({ tabId: selectedId }).catch(() => {});
     driver = undefined;
@@ -132,21 +191,27 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 chrome.debugger.onEvent.addListener((target, method, params) => {
-  if (target.tabId !== tabId || !driver) return;
-  void driver.onEvent(method, params ?? {}).catch(() => {
+  if (target.tabId !== tabId) return;
+  const failed = () => {
+    if (active?.state.sharing)
+      active.state.notice = "Sharing ended because this page could no longer be controlled safely";
     cancelStart();
     return active?.stop();
-  });
+  };
+  void monitor?.onEvent(method, params ?? {}, target.sessionId).catch(failed);
+  if (!target.sessionId) void driver?.onEvent(method, params ?? {}).catch(failed);
 });
 chrome.debugger.onDetach.addListener((target) => {
   if (target.tabId === tabId) {
     cancelStart();
+    void monitor?.dispose();
     void active?.stop();
   }
 });
 chrome.tabs.onRemoved.addListener((id) => {
   if (id === tabId) {
     cancelStart();
+    void monitor?.dispose();
     void active?.stop();
   }
 });

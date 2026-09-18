@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { type Fetch, createSession } from "@remote-tab/client";
+import { until } from "../../../tests/e2e/fake-tab";
 import { createApp } from "../../server/src/app";
 import { MemoryStore } from "../../server/src/memory-store";
 import type { ChromeApi, Sender, Tab } from "./chrome";
@@ -19,7 +20,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function setup(hold?: "redeem" | "status") {
+async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existingCapture = false) {
   const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["test", "test-key"]]) });
   const directFetch: Fetch = (request) => app.fetch(request);
   const { code, session } = await createSession({
@@ -33,11 +34,15 @@ async function setup(hold?: "redeem" | "status") {
   const attached: number[] = [];
   const detached: number[] = [];
   const fetchedTabs: number[] = [];
+  const cdpCalls: { method: string; params: Record<string, unknown> }[] = [];
+  let ownListenersRemoved = false;
+  let holdNextWrite = false;
   let statusReads = 0;
   let queries = 0;
   let tab: Tab = { ...consentTab };
   let onMessage: Parameters<ChromeApi["runtime"]["onMessage"]["addListener"]>[0];
   let onDetach: Parameters<ChromeApi["debugger"]["onDetach"]["addListener"]>[0];
+  let onEvent: Parameters<ChromeApi["debugger"]["onEvent"]["addListener"]>[0];
   let onRemoved: Parameters<ChromeApi["tabs"]["onRemoved"]["addListener"]>[0];
   const api: ChromeApi = {
     runtime: {
@@ -75,11 +80,85 @@ async function setup(hold?: "redeem" | "status") {
       detach: async ({ tabId }) => {
         detached.push(tabId);
       },
-      sendCommand: async (_target, method) =>
-        method === "Page.getFrameTree"
+      sendCommand: async (_target, method, params = {}) => {
+        cdpCalls.push({ method, params });
+        if (method === "Runtime.enable") {
+          onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
+            context: { id: 1, name: "", auxData: { isDefault: true, frameId: "main" } },
+          });
+          return {};
+        }
+        if (method === "Page.addScriptToEvaluateOnNewDocument") {
+          onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
+            context: {
+              id: 2,
+              name: params.worldName,
+              auxData: { isDefault: false, frameId: "main" },
+            },
+          });
+          return { identifier: "takeover-watcher" };
+        }
+        if (method === "Runtime.evaluate" && params.expression === "this")
+          return {
+            result: { type: "object", className: "Window", objectId: `window-${params.contextId}` },
+          };
+        if (method === "DOMDebugger.getEventListeners")
+          return {
+            listeners:
+              params.objectId === "window-1"
+                ? existingCapture
+                  ? [{ type: "keydown", useCapture: true }]
+                  : []
+                : ownListenersRemoved
+                  ? []
+                  : [
+                      "keydown",
+                      "keyup",
+                      "pointerdown",
+                      "pointerup",
+                      "pointermove",
+                      "pointercancel",
+                      "wheel",
+                    ].map((type) => ({ type, useCapture: true })),
+          };
+        if (method === "DOMSnapshot.captureSnapshot" && sensitiveValue)
+          return {
+            strings: ["main", tab.url, "INPUT", "type", "password", sensitiveValue],
+            documents: [
+              {
+                frameId: 0,
+                documentURL: 1,
+                nodes: {
+                  nodeName: [2],
+                  backendNodeId: [10],
+                  attributes: [[3, 4]],
+                  inputValue: { index: [0], value: [5] },
+                },
+                layout: { nodeIndex: [0], bounds: [[0, 0, 100, 20]] },
+              },
+            ],
+          };
+        return method === "Page.getFrameTree"
           ? { frameTree: { frame: { id: "main", url: consentTab.url } } }
-          : {},
-      onEvent: { addListener: () => {} },
+          : method === "DOMSnapshot.captureSnapshot"
+            ? {
+                strings: ["main", consentTab.url],
+                documents: [
+                  {
+                    frameId: 0,
+                    documentURL: 1,
+                    nodes: { nodeName: [], backendNodeId: [], attributes: [] },
+                    layout: { nodeIndex: [], bounds: [] },
+                  },
+                ],
+              }
+            : {};
+      },
+      onEvent: {
+        addListener: (listener) => {
+          onEvent = listener;
+        },
+      },
       onDetach: {
         addListener: (listener) => {
           onDetach = listener;
@@ -95,6 +174,11 @@ async function setup(hold?: "redeem" | "status") {
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === `/v1/sessions/${session.sessionId}`)
         statusReads++;
+      if (holdNextWrite && request.method === "POST" && url.pathname.endsWith("/messages")) {
+        holdNextWrite = false;
+        reached.resolve();
+        await release.promise;
+      }
       // BrowserPeer verifies hello with two status reads; the third is connect's expiry read.
       if (
         (hold === "redeem" && url.pathname.endsWith("/redeem")) ||
@@ -123,6 +207,38 @@ async function setup(hold?: "redeem" | "status") {
   return {
     code,
     session,
+    cdpCalls,
+    removeOwnListeners: () => {
+      ownListenersRemoved = true;
+    },
+    holdNextWrite: () => {
+      holdNextWrite = true;
+    },
+    redeemElsewhere: () =>
+      directFetch(
+        new Request(`${origin}/v1/sessions/${session.sessionId}/redeem`, { method: "POST" }),
+      ),
+    untrusted: (value: unknown, source: Sender) => {
+      let responded = false;
+      const accepted = onMessage(value, source, () => {
+        responded = true;
+      });
+      return { accepted, responded: () => responded };
+    },
+    event: (method: string, params: Record<string, unknown>, target = consentTab.id) =>
+      onEvent({ tabId: target }, method, params),
+    humanInput: () => {
+      const binding = cdpCalls.find((call) => call.method === "Runtime.addBinding");
+      if (!binding) throw new Error("Takeover binding has not been installed");
+      onEvent({ tabId: consentTab.id }, "Runtime.bindingCalled", {
+        name: binding.params.name,
+        executionContextId: 2,
+        payload: JSON.stringify({ type: "keydown", key: "x", modifiers: 0 }),
+      });
+    },
+    changeTitle: (title: string) => {
+      tab = { ...tab, title };
+    },
     message,
     reached,
     release,
@@ -209,3 +325,180 @@ for (const phase of ["redeem", "status"] as const) {
     });
   }
 }
+
+test("already redeemed code gives actionable error and detaches the attempted tab", async () => {
+  const h = await setup();
+  expect((await h.redeemElsewhere()).status).toBe(200);
+  expect(await h.share()).toEqual({
+    ok: false,
+    error: "This code was already used — tell your agent",
+  });
+  expect(h.attached).toEqual([consentTab.id]);
+  expect(h.detached).toContain(consentTab.id);
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false, starting: false });
+});
+
+test("only the exact installed popup can inspect state or perform human controls", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  const before = h.requests.length;
+  const invalidSenders: Sender[] = [
+    { id: "another-extension", url: "chrome-extension://installed-extension/popup.html" },
+    { id: "installed-extension", url: consentTab.url, tab: consentTab },
+    { id: "installed-extension", url: "chrome-extension://installed-extension/untrusted.html" },
+    { id: "installed-extension", url: "chrome-extension://installed-extension/popup.html?spoof=1" },
+    {},
+  ];
+  for (const source of invalidSenders) {
+    for (const action of ["state", "stop", "resume", "done", "extend", "share"]) {
+      const response = h.untrusted({ action, code: h.code }, source);
+      expect(response.accepted).toBeUndefined();
+      expect(response.responded()).toBe(false);
+    }
+  }
+  expect(h.requests.slice(before).filter((request) => request.method === "POST")).toHaveLength(0);
+  expect(h.detached).toHaveLength(0);
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, extended: false });
+});
+
+for (const phase of ["redeem", "status"] as const) {
+  test(`trusted human input during deferred ${phase} starts paused and requires explicit Resume`, async () => {
+    const h = await setup(phase);
+    const pending = h.share();
+    await h.reached.promise;
+    h.humanInput();
+    h.release.resolve();
+    expect(await pending).toEqual({ ok: true });
+    expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, paused: true });
+    const before = h.cdpCalls.length;
+    expect(await h.session.send("browser_snapshot", {}, { timeoutMs: 2000 })).toMatchObject({
+      ok: false,
+      error: { code: "paused" },
+    });
+    expect(h.cdpCalls).toHaveLength(before);
+    expect(await h.message({ action: "resume" })).toEqual({ ok: true });
+    expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, paused: false });
+  });
+}
+
+test("paused human navigation still resolves Fetch interception while agent actions stay denied", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  h.humanInput();
+  expect(await h.message({ action: "state" })).toMatchObject({ paused: true });
+  h.event("Fetch.requestPaused", {
+    requestId: "human-same-site",
+    resourceType: "Document",
+    request: { url: "https://example.test/next" },
+  });
+  await until(() =>
+    h.cdpCalls.some(
+      (call) =>
+        call.method === "Fetch.continueRequest" && call.params.requestId === "human-same-site",
+    ),
+  );
+  h.event("Fetch.requestPaused", {
+    requestId: "human-outside",
+    resourceType: "Document",
+    request: { url: "https://outside.test/" },
+  });
+  await until(() =>
+    h.cdpCalls.some(
+      (call) => call.method === "Fetch.failRequest" && call.params.requestId === "human-outside",
+    ),
+  );
+  expect(h.detached).toHaveLength(0);
+  const before = h.cdpCalls.length;
+  expect(await h.session.send("browser_snapshot", {}, { timeoutMs: 2000 })).toMatchObject({
+    ok: false,
+    error: { code: "paused" },
+  });
+  expect(h.cdpCalls).toHaveLength(before);
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, paused: true });
+});
+
+test("sensitive metadata is redacted in hello and never reintroduced by popup status polling", async () => {
+  const secret = "worker-secret-9137";
+  const h = await setup(undefined, secret);
+  h.changeTitle(`Account ${secret}`);
+  expect(await h.share()).toEqual({ ok: true });
+  const ready = await h.session.waitReady();
+  expect(ready.title).toBe("Account [redacted]");
+  expect(JSON.stringify(ready)).not.toContain(secret);
+  // Popup is local and may show the real title; the agent's status must not inherit it.
+  expect(await h.message({ action: "state" })).toMatchObject({ title: `Account ${secret}` });
+  const status = await h.session.send("remote_tab_status", {}, { timeoutMs: 2000 });
+  expect(status.ok).toBe(true);
+  expect(JSON.stringify(status)).not.toContain(secret);
+  expect(
+    JSON.stringify((await h.session.ledger()).entries.map((entry) => entry.envelope)),
+  ).not.toContain(secret);
+});
+
+test("human input while Done is awaiting delivery preserves the new takeover pause", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  const handedBack = h.session.handoff("Please confirm");
+  let state: unknown;
+  await until(() =>
+    h.requests.some((request) => new URL(request.url).pathname.endsWith("/messages")),
+  );
+  for (let i = 0; i < 100; i++) {
+    state = await h.message({ action: "state" });
+    if ((state as { handoff?: unknown }).handoff) break;
+    await Bun.sleep(5);
+  }
+  expect(state).toMatchObject({ paused: true, handoff: { message: "Please confirm" } });
+  h.holdNextWrite();
+  const done = h.message({ action: "done" });
+  await h.reached.promise;
+  h.humanInput();
+  h.release.resolve();
+  expect(await done).toEqual({ ok: true });
+  await handedBack;
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, paused: true });
+  const before = h.cdpCalls.length;
+  expect(await h.session.send("browser_snapshot", {}, { timeoutMs: 2000 })).toMatchObject({
+    ok: false,
+    error: { code: "paused" },
+  });
+  expect(h.cdpCalls).toHaveLength(before);
+});
+
+test("preexisting page capture handler refuses sharing before redemption and detaches", async () => {
+  const h = await setup(undefined, undefined, true);
+  expect(await h.share()).toEqual({
+    ok: false,
+    error: "This page prevents reliable takeover monitoring. Sharing is unavailable.",
+  });
+  expect(h.attached).toEqual([consentTab.id]);
+  expect(h.detached).toContain(consentTab.id);
+  expect(h.requests).toHaveLength(0);
+  expect(
+    h.cdpCalls.some(
+      (call) =>
+        call.method === "DOMDebugger.getEventListeners" && call.params.objectId === "window-1",
+    ),
+  ).toBe(true);
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false, starting: false });
+  expect((await h.session.status()).redeemed).toBe(false);
+});
+
+test("missing takeover listeners terminate sharing before the next screenshot without a lifecycle event", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  const before = h.cdpCalls.length;
+  h.removeOwnListeners();
+  await expect(
+    h.session.send("browser_take_screenshot", {}, { timeoutMs: 2000 }),
+  ).rejects.toMatchObject({ code: "session_not_active" });
+  await until(() => h.detached.includes(consentTab.id));
+  expect(
+    h.cdpCalls.slice(before).some((call) => call.method === "DOMDebugger.getEventListeners"),
+  ).toBe(true);
+  expect(
+    h.cdpCalls.slice(before).filter((call) => call.method === "Page.captureScreenshot"),
+  ).toHaveLength(0);
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false });
+  expect((await h.session.status()).state).toBe("stopped");
+});
