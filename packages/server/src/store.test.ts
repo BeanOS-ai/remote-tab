@@ -277,6 +277,7 @@ describe("GCS admission and byte reservation failures", () => {
         entered.resolve();
         await release.promise;
       }
+      return undefined;
     };
     const extension = a.updateSession(record.id, (s) => ({
       ...s,
