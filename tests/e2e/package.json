@@ -1,0 +1,14 @@
+{
+  "name": "@remote-tab/e2e",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@remote-tab/cli": "workspace:*",
+    "@remote-tab/client": "workspace:*",
+    "@remote-tab/mcp": "workspace:*",
+    "@remote-tab/protocol": "workspace:*",
+    "@remote-tab/server": "workspace:*"
+  }
+}
