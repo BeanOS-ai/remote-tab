@@ -331,6 +331,13 @@ period is configurable for slow transports. A failed hello is suspicion,
 not proof of theft. `already_redeemed` remains the separate browser-facing
 one-shot-redeem error (§4.4). No command is sent before a valid hello.
 
+The M2 stdio MCP adapter exposes §6 plus create/wait-ready, configured by
+`REMOTE_TAB_SERVER_URL` and `REMOTE_TAB_API_KEY`. It retains one current
+session in memory. Status currently includes transport metadata and cached
+authenticated hello mode/scope. The dead-drop status has no live
+paused-by-human field; that state remains unknown until M3 adds authenticated
+browser-state reporting. It must not be inferred as false.
+
 Coding harnesses: Claude Code and Codex attach the MCP server or shell out to
 the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
 `beanos-tab-share` skill is retired at cutover.
