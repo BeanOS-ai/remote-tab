@@ -125,8 +125,9 @@ a key: it is an API, not a web application (§5.5).
 - Keys: `HKDF-SHA256(secret, info="remote-tab/v1/" + session-id)` → one
   AES-256-GCM key. (WebCrypto has AES-GCM natively on both sides.)
 - Every message and blob: AES-256-GCM, 96-bit random nonce, AAD =
-  `session-id || role || seq`. Tampering or replay across sessions fails to
-  decrypt.
+  `session-id | role | prev_hash` (the sender knows `prev_hash`; the server
+  assigns `seq` only after the append). Tampering, replay across sessions, and
+  replay at a different chain position all fail to decrypt.
 - No ECDH. The code is already delivered on a private channel; a symmetric
   secret is enough and removes a key-exchange round trip.
 - Hash chain: each message carries `prev_hash` and the server rejects a
@@ -153,9 +154,13 @@ These are the only routes; the server serves no pages (§5.5).
 | `POST /v1/sessions/{id}/stop` | agent or browser | terminal |
 | `GET /v1/sessions/{id}` | agent or browser | `{state, expires_at, last_seq, redeemed}` (no content) |
 
-The server keeps per-session state (tokens, state, last seq/hash, expiry) in
-a small store and message/blob bodies in GCS under
-`sessions/{id}/{seq}.bin` and `sessions/{id}/blobs/{blob_id}`. A bucket
+The server keeps per-session state (tokens as SHA-256 hashes, state, last
+seq/hash, expiry) as `sessions/{id}/state.json` and message/blob bodies as
+`sessions/{id}/msgs/{seq}.json` and `sessions/{id}/blobs/{blob_id}`, all in
+GCS. `state.json` is the sequence cursor: an append is a generation-matched
+compare-and-swap on it followed by a create-only write of the message
+object, so two server instances cannot hand out the same `seq`. A memory
+store with the same interface serves tests and local development. A bucket
 lifecycle rule deletes everything 24 h after `expires_at`. Message size cap
 64 KiB; larger payloads (screenshots, DOM dumps) go through blobs and the
 message carries the blob id.
