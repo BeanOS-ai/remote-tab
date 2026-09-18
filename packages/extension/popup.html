@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Remote Tab</title><link rel="stylesheet" href="style.css"></head>
+<body><h1>Remote Tab</h1><p id="tab"></p>
+<form id="consent"><label for="code">Private code from your agent</label><input id="code" type="password" placeholder="rt1.…" autocomplete="off" spellcheck="false" required>
+<fieldset><legend>What may your agent do?</legend>
+<label><input type="radio" name="mode" value="read" checked> Read-only</label>
+<label><input type="radio" name="mode" value="act"> Act — click, type, navigate</label>
+<label><input type="radio" name="mode" value="full"> Full — scripting access</label></fieldset>
+<label><input type="checkbox" id="site" checked> This site only</label>
+<button id="share" type="submit">Share this tab</button></form>
+<section id="live" hidden><p id="state"></p><button id="stop" type="button">Stop</button><p>Chrome’s “is debugging this browser” bar means Remote Tab controls this shared tab. Stop detaches it.</p></section>
+<p id="error" role="status"></p><script src="popup.js" type="module"></script></body></html>
