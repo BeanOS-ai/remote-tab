@@ -174,3 +174,38 @@ M3 supplies the installed extension: tab consent and binding, actual browser
 actions, mode/scope enforcement and redaction, live human-pause reporting,
 and the human-owned ledger viewer with GIF/WebM rendering. The fake tab is
 a protocol test fixture, not a substitute for those extension checks.
+
+## Self-hosting and extension distribution
+
+Build and run the server with Bun as described above. Put the API behind your
+own HTTPS origin; choose the store and creation/auth limits in your deployment
+configuration. Keep credentials outside this checkout. `/docs` provides the
+agent bootstrap; the server never hosts a consent or ledger page.
+
+The installed extension must be built for that same origin. From a clean
+checkout with dependencies installed:
+
+```sh
+REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
+  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.0.zip
+```
+
+The release packager requires an explicit HTTPS origin and rejects the default
+placeholder. It builds from source into a temporary directory, then includes
+only the manifest, local runtime/assets, and license notices. The manifest's
+host permission and worker configuration derive from the same setting. No
+server address, credential, or deployment configuration is committed here.
+
+For development, `bun packages/extension/build.ts` writes `dist/extension` for
+Chrome's **Load unpacked**. Its default `https://remote-tab.example` is a
+placeholder; HTTP loopback origins are permitted only for development builds.
+Store uploads and publishing are separate distribution actions. Version 2.0.0
+retains the existing **Bean Tab Share** listing name; a public-store rename is
+an M5 decision. See [extension usage](packages/extension/README.md) for consent,
+controls, privacy behavior, and local ledger export.
+
+The generic 2.0.0 build accepts only `rt1.` codes. Supporting the legacy 1.1.2
+short-key/pointer flow requires deployment-owned GCS/paste-bin origins, so that
+one-release compatibility shim belongs in the BeanOS distribution during M4.
+It is intentionally absent here and must be removed from that distribution in
+2.1. The generic host permission remains exactly the configured server origin.
