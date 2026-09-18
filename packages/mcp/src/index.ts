@@ -225,7 +225,7 @@ export function createMcpServer(options: McpOptions): McpServer {
         description: `${descriptions[name]} ${untrusted}`,
         inputSchema: browserSchemas[name],
       },
-      (args, extra) =>
+      (args: Record<string, unknown>, extra: { signal: AbortSignal }) =>
         guarded(async () =>
           commandResult(await session().send(name, args, { signal: extra.signal })),
         ),
