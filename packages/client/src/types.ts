@@ -29,6 +29,12 @@ export interface WaitOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
 }
+export interface LedgerOptions extends WaitOptions {
+  /** Optional retrieval limits; omitted limits preserve unrestricted client exports. */
+  maxEntries?: number;
+  /** UTF-8 JSON status and entry metadata plus decrypted attachment bytes. */
+  maxBytes?: number;
+}
 export interface CreateOptions extends ClientOptions {
   serverUrl: string;
   apiKey: string;
@@ -110,7 +116,8 @@ export type ClientErrorCode =
   | "protocol_invalid"
   | "timeout"
   | "aborted"
-  | "handoff_pending";
+  | "handoff_pending"
+  | "ledger_too_large";
 export class RemoteTabError extends Error {
   constructor(
     readonly code: ClientErrorCode,

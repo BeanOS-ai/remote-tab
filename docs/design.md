@@ -416,7 +416,8 @@ original browser peer, so a subsequent share cannot replace the history. The
 worker uses the existing peer to authenticate/decrypt and verify the ledger;
 bounded runtime-message chunks carry decrypted data, never the key, to the page.
 The page repeats `verifyChain`, checks the final sequence/hash and attachment
-hashes, and releases the worker copy after successful transfer. It then works
+hashes, and releases the worker copy after successful transfer. Closing a viewer
+or a failed load also attempts to release its transfer slot. It then works
 from page memory even if the worker sleeps. Neither keys nor ledgers persist to
 extension storage: closing/reloading the page or restarting before export can
 lose the in-memory history.
@@ -425,8 +426,9 @@ ZIP uses the CLI's `ledger.json` / `shots/*.png` / other-blob layout. The in-rep
 MIT GIF encoder uses fixed 640×360 letterboxed frames, a deterministic RGB332
 palette, one second per screenshot, and a session-id comment. No CDN, external
 media service, or dependency is required. The viewer explicitly refuses ledgers
-over 5,000 entries / 96 MiB (32 MiB metadata) and GIFs over 300 screenshots;
-it never silently drops entries to fit. Pending worker transfers expire after
+over 5,000 entries / 96 MiB (32 MiB transfer metadata) and GIFs over 300 screenshots;
+the shared client enforces retrieval budgets and reads attachments sequentially,
+and the viewer never silently drops entries to fit. Pending worker transfers expire after
 five minutes and at most two coexist. ZIP remains available when GIF rendering
 exceeds its limits.
 

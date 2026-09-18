@@ -8,7 +8,10 @@ afterEach(() => {
   for (const [jobs, id] of ids.splice(0)) jobs.release(id);
 });
 function create(jobs: LedgerJobs, ledger: Ledger, after?: Promise<unknown>) {
-  const id = jobs.create({ sessionId: ledger.sessionId, ledger: async () => ledger }, after);
+  const id = jobs.create(
+    { sessionId: ledger.sessionId, ledger: async () => structuredClone(ledger) },
+    after,
+  );
   ids.push([jobs, id]);
   return id;
 }
@@ -129,7 +132,7 @@ test("job waits for Stop, binds its original peer and snapshots bytes immutably"
     sessionId: first.sessionId,
     ledger: async () => {
       calls++;
-      return first;
+      return structuredClone(first);
     },
   };
   const id = jobs.create(active, stopped);
@@ -345,4 +348,53 @@ test("timeouts are bounded, status cannot change session, and a lost release ack
     return rpc(message);
   });
   expect(restored).toEqual(ledger);
+});
+
+test("jobs pass retrieval limits, serialize allocations, abort released downloads and map budget failures safely", async () => {
+  const ledger = await fixture();
+  const jobs = new LedgerJobs();
+  let captured: import("@remote-tab/client").LedgerOptions | undefined;
+  let rejectFirst = (_error: Error) => {};
+  const first = jobs.create({
+    sessionId: ledger.sessionId,
+    ledger: (options) => {
+      captured = options;
+      return new Promise((_resolve, reject) => {
+        rejectFirst = reject;
+        options?.signal?.addEventListener(
+          "abort",
+          () => reject(new Error("aborted private download")),
+          { once: true },
+        );
+      });
+    },
+  });
+  ids.push([jobs, first]);
+  let secondStarted = false;
+  const second = jobs.create({
+    sessionId: ledger.sessionId,
+    ledger: async () => {
+      secondStarted = true;
+      return structuredClone(ledger);
+    },
+  });
+  ids.push([jobs, second]);
+  await Bun.sleep(1);
+  expect(captured).toMatchObject({ maxEntries: 5000, maxBytes: 96 * 1024 * 1024 });
+  expect(captured?.signal?.aborted).toBe(false);
+  expect(secondStarted).toBe(false);
+  jobs.release(first);
+  expect(captured?.signal?.aborted).toBe(true);
+  rejectFirst(new Error("cleanup"));
+  expect((await ready(jobs, second)).state).toBe("ready");
+  const { RemoteTabError } = await import("@remote-tab/client");
+  const failed = jobs.create({
+    sessionId: ledger.sessionId,
+    ledger: async () => {
+      throw new RemoteTabError("ledger_too_large", "private server message");
+    },
+  });
+  ids.push([jobs, failed]);
+  expect(await ready(jobs, failed)).toMatchObject({ state: "error", code: "ledger_too_large" });
+  expect(JSON.stringify(jobs.status(failed))).not.toContain("private server message");
 });

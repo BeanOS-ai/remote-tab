@@ -25,9 +25,65 @@ import {
   type Fetch,
   type Ledger,
   type LedgerEntry,
+  type LedgerOptions,
   RemoteTabError,
   type WaitOptions,
 } from "./types";
+
+interface LedgerBudget {
+  maxEntries: number;
+  maxBytes: number;
+  usedBytes: number;
+}
+const ledgerTooLarge = () =>
+  new RemoteTabError("ledger_too_large", "Ledger exceeds retrieval limits");
+const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
+function charge(budget: LedgerBudget | undefined, bytes: number): void {
+  if (!budget) return;
+  if (bytes > budget.maxBytes - budget.usedBytes) throw ledgerTooLarge();
+  budget.usedBytes += bytes;
+}
+
+/** Enforce the limit while consuming the body, including servers without Content-Length. */
+async function limitedBody(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+): Promise<Uint8Array<ArrayBuffer>> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array();
+  const cancel = () => {
+    void reader.cancel().catch(() => {});
+  };
+  signal.addEventListener("abort", cancel, { once: true });
+  try {
+    const length = response.headers.get("content-length");
+    if (length !== null && Number(length) > maxBytes) throw ledgerTooLarge();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      if (signal.aborted) throw new RemoteTabError("aborted", "Operation aborted");
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > maxBytes - total) throw ledgerTooLarge();
+      total += value.byteLength;
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  } catch (error) {
+    cancel();
+    throw error;
+  } finally {
+    signal.removeEventListener("abort", cancel);
+    reader.releaseLock();
+  }
+}
 
 export function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -53,6 +109,7 @@ export async function request(
   token: string | undefined,
   init: RequestInit = {},
   timeoutMs = 30_000,
+  maxResponseBytes?: number,
 ): Promise<Response> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -72,7 +129,10 @@ export async function request(
             signal: controller.signal,
           }),
         );
-        const bytes = await response.arrayBuffer();
+        const bytes =
+          maxResponseBytes === undefined
+            ? await response.arrayBuffer()
+            : await limitedBody(response, maxResponseBytes, controller.signal);
         return new Response(bytes.byteLength ? bytes : null, {
           status: response.status,
           statusText: response.statusText,
@@ -118,6 +178,7 @@ export class Peer {
   protected readonly fetcher: Fetch;
   protected readonly options: Required<Omit<ClientOptions, "fetch">>;
   private queue: Promise<unknown> = Promise.resolve();
+  private ledgerBudget?: LedgerBudget;
   constructor(
     readonly serverUrl: string,
     readonly sessionId: string,
@@ -162,6 +223,7 @@ export class Peer {
     path = "",
     init: RequestInit = {},
     timeoutMs = this.options.requestTimeoutMs,
+    maxResponseBytes?: number,
   ): Promise<Response> {
     return request(
       this.fetcher,
@@ -169,6 +231,10 @@ export class Peer {
       this.token,
       init,
       timeoutMs,
+      maxResponseBytes ??
+        (this.ledgerBudget
+          ? Math.max(0, this.ledgerBudget.maxBytes - this.ledgerBudget.usedBytes) + 1024
+          : undefined),
     );
   }
   async status(options: WaitOptions = {}): Promise<SessionStatus> {
@@ -193,6 +259,13 @@ export class Peer {
     if (!Array.isArray(messages))
       throw new RemoteTabError("protocol_invalid", "Invalid message page");
     for (const message of messages) {
+      if (this.ledgerBudget && this.entries.length >= this.ledgerBudget.maxEntries)
+        throw ledgerTooLarge();
+      if (
+        this.ledgerBudget &&
+        jsonBytes(message) > this.ledgerBudget.maxBytes - this.ledgerBudget.usedBytes
+      )
+        throw ledgerTooLarge();
       const tail = this.tail();
       if (
         message.seq !== tail.seq + 1 ||
@@ -222,7 +295,9 @@ export class Peer {
         !object(envelope.body)
       )
         throw new RemoteTabError("protocol_invalid", "Invalid envelope");
-      this.entries.push({ message, envelope, attachments: [] });
+      const entry = { message, envelope, attachments: [] };
+      if (this.ledgerBudget) charge(this.ledgerBudget, jsonBytes(entry));
+      this.entries.push(entry);
     }
   }
   /** Anchors every read to status; the server may append newer messages while paging. */
@@ -243,6 +318,8 @@ export class Peer {
   ): Promise<SessionStatus> {
     const deadline = this.options.now() + budgetMs;
     const anchor = await this.status({ timeoutMs: budgetMs, signal });
+    if (this.ledgerBudget && anchor.last_seq > this.ledgerBudget.maxEntries) throw ledgerTooLarge();
+    if (this.ledgerBudget) charge(this.ledgerBudget, jsonBytes(anchor));
     let wait = waitSeconds;
     if (anchor.last_seq < this.tail().seq)
       throw new RemoteTabError("chain_invalid", "Server rolled back the chain");
@@ -410,41 +487,58 @@ export class Peer {
         throw new RemoteTabError("protocol_invalid", "Invalid result blobs");
       for (const reference of body.blobs) addReference(reference);
     }
-    return Promise.all(
-      found.map(async (reference) => {
-        const bytes = new Uint8Array(
-          await (
-            await this.call(
-              `/blobs/${reference.blob_id}`,
-              { signal: options.signal },
-              Math.min(this.options.requestTimeoutMs, this.checkWait(deadline, options.signal)),
-            )
-          ).arrayBuffer(),
+    const attachments: Attachment[] = [];
+    for (const reference of found) {
+      // AES-GCM adds a 16-byte authentication tag. Bound ciphertext before
+      // allocation/decryption, then charge the actual retained plaintext.
+      const remaining = this.ledgerBudget
+        ? this.ledgerBudget.maxBytes - this.ledgerBudget.usedBytes
+        : undefined;
+      const bytes = new Uint8Array(
+        await (
+          await this.call(
+            `/blobs/${reference.blob_id}`,
+            { signal: options.signal },
+            Math.min(this.options.requestTimeoutMs, this.checkWait(deadline, options.signal)),
+            remaining === undefined ? undefined : Math.min(LIMITS.blobMaxBytes, remaining + 16),
+          )
+        ).arrayBuffer(),
+      );
+      let plaintext: Attachment["bytes"];
+      try {
+        plaintext = await openBytes(
+          await this.key,
+          unb64url(reference.nonce),
+          bytes,
+          messageAad(this.sessionId, reference.role, reference.prev_hash),
         );
-        try {
-          return {
-            reference,
-            bytes: await openBytes(
-              await this.key,
-              unb64url(reference.nonce),
-              bytes,
-              messageAad(this.sessionId, reference.role, reference.prev_hash),
-            ),
-          };
-        } catch {
-          throw new RemoteTabError("decrypt_failed", "Blob authentication failed");
-        }
-      }),
-    );
+      } catch {
+        throw new RemoteTabError("decrypt_failed", "Blob authentication failed");
+      }
+      charge(this.ledgerBudget, plaintext.byteLength);
+      attachments.push({ reference, bytes: plaintext });
+    }
+    return attachments;
   }
   /** Verify from genesis again, then decrypt every referenced blob, including after stop/expiry. */
-  async ledger(): Promise<Ledger> {
+  async ledger(options: LedgerOptions = {}): Promise<Ledger> {
+    for (const limit of [options.maxEntries, options.maxBytes]) {
+      if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 0))
+        throw new RemoteTabError("invalid", "Ledger limits must be nonnegative safe integers");
+    }
     const known = this.tail();
     const reader = new Peer(this.serverUrl, this.sessionId, this.token, this.key, this.role, {
       ...this.options,
       fetch: this.fetcher,
     });
-    const status = await reader.refresh();
+    if (options.maxEntries !== undefined || options.maxBytes !== undefined) {
+      reader.ledgerBudget = {
+        maxEntries: options.maxEntries ?? Number.POSITIVE_INFINITY,
+        maxBytes: options.maxBytes ?? Number.POSITIVE_INFINITY,
+        usedBytes: 0,
+      };
+    }
+    const status = await reader.refresh(0, options.timeoutMs, options.signal);
     if (
       known.seq > status.last_seq ||
       (known.seq > 0 && reader.entries[known.seq - 1]?.message.hash !== known.hash)
@@ -457,14 +551,13 @@ export class Peer {
       reader.entries.map(({ message }) => ({ ...message, prevHash: message.prev_hash })),
     );
     if (!verified.ok) throw new RemoteTabError("chain_invalid", verified.reason);
-    const entries = await Promise.all(
-      reader.entries.map(async (entry) => ({
-        ...entry,
-        attachments: await reader.attachments(entry),
-      })),
-    );
-    return structuredClone({ sessionId: this.sessionId, status, entries });
+    for (const entry of reader.entries)
+      entry.attachments = await reader.attachments(entry, options);
+    // The reader is private to this invocation. Its freshly decoded objects and
+    // buffers can be transferred without cloning the complete ledger again.
+    return { sessionId: this.sessionId, status, entries: reader.entries };
   }
+
   /** Stop immediately through the terminal endpoint; ledger status records the outcome. */
   async stop(): Promise<SessionStatus> {
     const status = await this.readStatus(await this.call("/stop", { method: "POST" }));

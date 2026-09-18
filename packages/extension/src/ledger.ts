@@ -1,4 +1,5 @@
 import type { Ledger, LedgerEntry } from "@remote-tab/client";
+import { UUID_V4_RE } from "@remote-tab/protocol";
 import { makeLedgerZip, screenshots } from "./archive";
 import { record } from "./chrome";
 import { GifEncoder, quantize } from "./gif";
@@ -11,6 +12,7 @@ const zipButton = element<HTMLButtonElement>("download-zip");
 const gifButton = element<HTMLButtonElement>("render-gif");
 const exportStatus = element("export-status");
 const urls = new Set<string>();
+const jobId = location.hash.slice(1);
 let ledger: Ledger | undefined;
 let gifUrl: string | undefined;
 function blobUrl(bytes: Uint8Array, type: string) {
@@ -22,7 +24,16 @@ function revoke(url: string) {
   URL.revokeObjectURL(url);
   urls.delete(url);
 }
+function releaseJob() {
+  if (!UUID_V4_RE.test(jobId)) return;
+  try {
+    void chrome.runtime.sendMessage({ action: "ledger-release", jobId }).catch(() => {});
+  } catch {
+    // The worker or extension context may already be unavailable during unload.
+  }
+}
 window.addEventListener("pagehide", () => {
+  releaseJob();
   for (const url of urls) URL.revokeObjectURL(url);
   urls.clear();
 });
@@ -245,7 +256,6 @@ gifButton.onclick = async () => {
 };
 async function start() {
   try {
-    const jobId = location.hash.slice(1);
     if (!jobId) throw new Error("This ledger page has no history job. Open it from Remote Tab.");
     const verified = await loadLedger(jobId, (message) => chrome.runtime.sendMessage(message));
     showLedger(verified);
@@ -255,6 +265,7 @@ async function start() {
     gifButton.disabled = !final;
     if (!final) exportStatus.textContent = "Stop sharing to render the final replay.";
   } catch (error) {
+    releaseJob();
     status.dataset.state = "error";
     status.textContent = `History unavailable: ${error instanceof Error ? error.message : "verification failed"}`;
   }

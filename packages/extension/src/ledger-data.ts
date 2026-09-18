@@ -5,6 +5,7 @@ import type {
   Ledger,
   LedgerEntry,
 } from "@remote-tab/client";
+import { RemoteTabError } from "@remote-tab/client";
 import {
   PROTOCOL_VERSION,
   type SessionStatus,
@@ -71,6 +72,7 @@ interface LedgerMetadata {
   }[];
 }
 interface Job {
+  controller: AbortController;
   sessionId: string;
   status: LedgerJobStatus;
   expiresAt: number;
@@ -220,6 +222,7 @@ function validateMetadata(value: unknown, sessionId: string): LedgerMetadata {
 export class LedgerJobs {
   private readonly jobs = new Map<string, Job>();
   private cachedBytes = 0;
+  private retrieval: Promise<void> = Promise.resolve();
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly maxJobs: number;
@@ -250,6 +253,7 @@ export class LedgerJobs {
     if (this.jobs.size >= this.maxJobs) throw new LedgerTransferError("ledger_busy");
     const id = crypto.randomUUID();
     const job: Job = {
+      controller: new AbortController(),
       sessionId: peer.sessionId,
       status: { state: "loading", sessionId: peer.sessionId },
       expiresAt: this.now() + this.ttlMs,
@@ -259,7 +263,12 @@ export class LedgerJobs {
     this.jobs.set(id, job);
     // A failed remote Stop still permits a verified snapshot labelled with the
     // actual returned status. It must never be represented as confirmed stopped.
-    void after.catch(() => undefined).then(() => this.prepare(id, job, peer));
+    void after
+      .catch(() => undefined)
+      .then(() => {
+        // Only one retrieval may allocate at a time; ready snapshots share its budget.
+        this.retrieval = this.retrieval.then(() => this.prepare(id, job, peer));
+      });
     return id;
   }
   private async prepare(
@@ -269,7 +278,11 @@ export class LedgerJobs {
   ): Promise<void> {
     try {
       if (this.jobs.get(id) !== job) return;
-      const ledger = structuredClone(await peer.ledger());
+      const ledger = await peer.ledger({
+        maxEntries: MAX_ENTRIES,
+        maxBytes: Math.max(0, this.maxBytes - this.cachedBytes),
+        signal: job.controller.signal,
+      });
       if (this.jobs.get(id) !== job) return;
       if (
         ledger.sessionId !== job.sessionId ||
@@ -329,7 +342,11 @@ export class LedgerJobs {
       const safe =
         error instanceof LedgerTransferError
           ? error
-          : new LedgerTransferError("ledger_unavailable");
+          : new LedgerTransferError(
+              error instanceof RemoteTabError && error.code === "ledger_too_large"
+                ? "ledger_too_large"
+                : "ledger_unavailable",
+            );
       job.status = { state: "error", code: safe.code, message: safe.message };
     }
   }
@@ -374,6 +391,7 @@ export class LedgerJobs {
     const job = this.jobs.get(id);
     if (!job) return;
     clearTimeout(job.timer);
+    job.controller.abort();
     this.cachedBytes -= job.bytes;
     this.jobs.delete(id);
   }

@@ -98,6 +98,7 @@ try {
   };
   let loading = true;
   const requests = [];
+  const releaseWaiters = new Map();
   await context.exposeBinding("ledgerRpc", (_source, message, corrupt) => {
     requests.push(message);
     if (message.action === "ledger-status") {
@@ -106,6 +107,7 @@ try {
     }
     if (message.action === "ledger-release") {
       jobs.release(message.jobId);
+      releaseWaiters.get(message.jobId)?.();
       return { ok: true };
     }
     assert.equal(message.action, "ledger-chunk");
@@ -225,8 +227,17 @@ try {
   assert.equal(await activePage.locator("#render-gif").isDisabled(), true);
   assert.match(await activePage.locator("#export-status").textContent(), /Stop sharing/);
   const badPage = await context.newPage();
-  await badPage.goto(`https://ledger.test/ledger.html?corrupt#${createJob(history)}`);
+  const badJobId = createJob(history);
+  const badReleased = new Promise((resolve) => releaseWaiters.set(badJobId, resolve));
+  await badPage.goto(`https://ledger.test/ledger.html?corrupt#${badJobId}`);
   await badPage.locator('#status[data-state="error"]').waitFor();
+  await Promise.race([
+    badReleased,
+    Bun.sleep(5000).then(() => {
+      throw new Error("Failed viewer did not release its job");
+    }),
+  ]);
+  assert.equal(jobs.status(badJobId).state, "error");
   assert.equal(await badPage.locator('#status[data-state="verified"]').count(), 0);
   assert.equal(await badPage.locator("#download-zip").isDisabled(), true);
   assert.equal(await badPage.locator("#render-gif").isDisabled(), true);
@@ -270,6 +281,24 @@ try {
   await page.locator('#status[data-state="error"]').waitFor();
   assert.equal(await page.locator("#download-zip").isDisabled(), true);
   assert.deepEqual(failures, []);
+  const pendingJobId = jobs.create(
+    { sessionId: history.sessionId, ledger: async () => history },
+    new Promise(() => {}),
+  );
+  jobIds.push(pendingJobId);
+  const pendingReleased = new Promise((resolve) => releaseWaiters.set(pendingJobId, resolve));
+  const pendingPage = await context.newPage();
+  await pendingPage.goto(`https://ledger.test/ledger.html#${pendingJobId}`);
+  assert.equal(await pendingPage.locator("#download-zip").isDisabled(), true);
+  assert.equal(jobs.status(pendingJobId).state, "loading");
+  await pendingPage.goto("about:blank");
+  await Promise.race([
+    pendingReleased,
+    Bun.sleep(5000).then(() => {
+      throw new Error("Closing a loading viewer did not release its job");
+    }),
+  ]);
+  assert.equal(jobs.status(pendingJobId).state, "error");
   const extensionPath = await buildExtension();
   const extension = await chromium.launchPersistentContext("", {
     headless: true,
