@@ -268,6 +268,26 @@ describe("privacy guard", () => {
     expect(JSON.stringify(output)).not.toContain("aBaB");
     expect(JSON.stringify(output)).toContain("Echo [redacted]");
   });
+  test.each(["initialize", "navigation", "same-document"])(
+    "%s preserves complete URLs until protected values are scrubbed",
+    async (phase) => {
+      const secret = "FAKE-BOUNDARY-PRIVATE";
+      const prefix = "https://example.com/?q=";
+      const url = prefix + "x".repeat(9996 - prefix.length) + secret;
+      const f = fixture([{ ...password, value: secret }]);
+      if (phase === "initialize")
+        f.state.hook = async (method) =>
+          method === "Page.getFrameTree" ? { frameTree: { frame: { id: "f1", url } } } : undefined;
+      await f.driver.initialize();
+      if (phase === "navigation")
+        await f.driver.onEvent("Page.frameNavigated", { frame: { id: "f1", url } });
+      if (phase === "same-document")
+        await f.driver.onEvent("Page.navigatedWithinDocument", { frameId: "f1", url });
+      const output = await f.driver.execute("browser_snapshot");
+      expect((output.result as { url: string }).url).toBe("[redacted: oversized]");
+      expect(JSON.stringify(output)).not.toContain("FAKE");
+    },
+  );
   test.each(["1", "e"])(
     "short protected value %s cannot corrupt snapshot keys, roles or usable refs",
     async (value) => {

@@ -26,6 +26,7 @@ interface Target {
   contexts: Set<number>;
   worlds: Map<number, { frame: string; ours: boolean; default: boolean }>;
   audited: Set<number>;
+  contextWaiters: Set<() => void>;
   scriptId?: string;
 }
 interface Expected {
@@ -167,8 +168,8 @@ export class TakeoverMonitor {
     this.onHuman();
   }
 
-  private startInstall(session: string, parent?: string): Promise<void> {
-    const task = this.install(session, parent).catch(() => {
+  private startInstall(session: string, parent?: string, waiting = false): Promise<void> {
+    const task = this.install(session, parent, waiting).catch(() => {
       throw this.fail();
     });
     this.installing.add(task);
@@ -179,9 +180,16 @@ export class TakeoverMonitor {
     return task;
   }
 
-  private async install(session: string, parent?: string): Promise<void> {
-    const target: Target = { parent, contexts: new Set(), worlds: new Map(), audited: new Set() };
+  private async install(session: string, parent?: string, waiting = false): Promise<void> {
+    const target: Target = {
+      parent,
+      contexts: new Set(),
+      worlds: new Map(),
+      audited: new Set(),
+      contextWaiters: new Set(),
+    };
     this.targets.set(session, target);
+    this.revision++;
     const call = (method: string, params?: Record<string, unknown>) =>
       this.send(method, params, session || undefined);
     await call("Runtime.enable");
@@ -195,12 +203,47 @@ export class TakeoverMonitor {
     if (record(script) && typeof script.identifier === "string")
       target.scriptId = script.identifier;
     else throw this.fail();
-    await this.audit(session, target);
     await call("Target.setAutoAttach", {
       autoAttach: true,
       waitForDebuggerOnStart: true,
       flatten: true,
       filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+    });
+    // Cold OOPIFs have no execution contexts until resumed. The watcher and its
+    // recursive child attachment are installed first; dispatch waits on this task
+    // until real context events arrive and every world passes admission.
+    if (waiting) await call("Runtime.runIfWaitingForDebugger", {});
+    await this.waitForWorlds(session, target);
+    await this.audit(session, target);
+  }
+
+  private worldsReady(target: Target): boolean {
+    if (!target.contexts.size || ![...target.worlds.values()].some((world) => world.default))
+      return false;
+    return [...target.worlds.values()].every(
+      (world) =>
+        [...target.worlds.values()].some((other) => other.frame === world.frame && other.ours) &&
+        [...target.worlds.values()].some((other) => other.frame === world.frame && other.default),
+    );
+  }
+
+  private waitForWorlds(session: string, target: Target): Promise<void> {
+    if (this.worldsReady(target)) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const finish = (error?: Error) => {
+        clearTimeout(timer);
+        target.contextWaiters.delete(check);
+        if (error) reject(error);
+        else resolve();
+      };
+      const check = () => {
+        if (this.disposed || this.targets.get(session) !== target) finish(new TakeoverError());
+        else if (this.worldsReady(target)) finish();
+      };
+      // Timeout only rejects; elapsed time can never admit an unchecked context.
+      const timer = setTimeout(() => finish(new TakeoverError()), 10_000);
+      target.contextWaiters.add(check);
+      check();
     });
   }
 
@@ -262,19 +305,26 @@ export class TakeoverMonitor {
 
   private async ready(): Promise<void> {
     if (this.failure) throw this.failure;
-    while (this.installing.size) await Promise.all(this.installing);
     // A page that keeps replacing worlds cannot race admission with an unchecked world.
     for (let pass = 0; pass < 3; pass++) {
+      while (this.installing.size) await Promise.all(this.installing);
       const revision = this.revision;
-      for (const [session, target] of this.targets) await this.audit(session, target);
-      if (revision === this.revision) return;
+      for (const [session, target] of this.targets) {
+        // A new iframe may attach while another target's asynchronous audit runs.
+        while (this.installing.size) await Promise.all(this.installing);
+        await this.audit(session, target);
+      }
+      if (revision === this.revision && !this.installing.size) return;
     }
     throw this.fail();
   }
 
   private forget(session: string): void {
     for (const [child, target] of this.targets) if (target.parent === session) this.forget(child);
+    const target = this.targets.get(session);
     this.targets.delete(session);
+    this.revision++;
+    for (const notify of target?.contextWaiters ?? []) notify();
     for (const event of this.expected) if (event.session === session) this.expected.delete(event);
   }
 
@@ -296,9 +346,7 @@ export class TakeoverMonitor {
         this.targets.has(params.sessionId)
       )
         return;
-      await this.startInstall(params.sessionId, session);
-      if (params.waitingForDebugger === true)
-        await this.send("Runtime.runIfWaitingForDebugger", {}, params.sessionId);
+      await this.startInstall(params.sessionId, session, params.waitingForDebugger === true);
       return;
     }
     if (method === "Target.detachedFromTarget") {
@@ -325,6 +373,7 @@ export class TakeoverMonitor {
       target.audited.delete(context.id);
       this.revision++;
       if (ours) target.contexts.add(context.id);
+      for (const notify of target.contextWaiters) notify();
       return;
     }
     if (
@@ -437,6 +486,8 @@ export class TakeoverMonitor {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    for (const target of this.targets.values())
+      for (const notify of target.contextWaiters) notify();
     this.expected.clear();
     const cleanup: Promise<unknown>[] = [];
     for (const [session, target] of this.targets) {

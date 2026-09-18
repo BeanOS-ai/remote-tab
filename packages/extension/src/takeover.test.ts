@@ -22,15 +22,21 @@ const inputTypes = [
   "pointercancel",
   "wheel",
 ];
-async function harness(foreignListeners: unknown[] = []) {
+async function harness(foreignListeners: unknown[] = [], coldSessions = new Set<string>()) {
   const calls: Call[] = [];
   let human = 0;
   let raw: ((call: Call) => Promise<unknown>) | undefined;
+  let resumed = () => {};
+  const coldResumed = new Promise<void>((resolve) => {
+    resumed = resolve;
+  });
   const monitor = new TakeoverMonitor(
     async (method, params, sessionId) => {
       const call = { method, params: params ?? {}, sessionId };
       calls.push(call);
-      if (method === "Runtime.enable")
+      if (method === "Runtime.runIfWaitingForDebugger" && sessionId && coldSessions.has(sessionId))
+        resumed();
+      if (method === "Runtime.enable" && !coldSessions.has(sessionId ?? ""))
         await monitor.onEvent(
           "Runtime.executionContextCreated",
           {
@@ -38,7 +44,7 @@ async function harness(foreignListeners: unknown[] = []) {
           },
           sessionId,
         );
-      if (method === "Page.addScriptToEvaluateOnNewDocument")
+      if (method === "Page.addScriptToEvaluateOnNewDocument" && !coldSessions.has(sessionId ?? ""))
         await monitor.onEvent(
           "Runtime.executionContextCreated",
           {
@@ -97,6 +103,11 @@ async function harness(foreignListeners: unknown[] = []) {
     context,
     input,
     source: String(script?.params.source),
+    coldResumed,
+    publishColdContexts: async (sessionId: string) => {
+      await context(90, sessionId, "", true);
+      await context(1, sessionId);
+    },
     humans: () => human,
     setRaw: (callback: typeof raw) => {
       raw = callback;
@@ -139,7 +150,12 @@ test("installs a named isolated world, binding and recursive iframe-only attachm
   for (const sessionId of ["child", "grandchild"]) {
     const childCalls = h.calls.filter((call) => call.sessionId === sessionId);
     expect(childCalls.some((call) => call.method === "Target.setAutoAttach")).toBe(true);
-    expect(childCalls.at(-1)?.method).toBe("Runtime.runIfWaitingForDebugger");
+    expect(childCalls.findIndex((call) => call.method === "Target.setAutoAttach")).toBeLessThan(
+      childCalls.findIndex((call) => call.method === "Runtime.runIfWaitingForDebugger"),
+    );
+    expect(
+      childCalls.findIndex((call) => call.method === "Runtime.runIfWaitingForDebugger"),
+    ).toBeLessThan(childCalls.findIndex((call) => call.method === "DOMDebugger.getEventListeners"));
   }
   const before = h.calls.length;
   await h.monitor.onEvent("Target.attachedToTarget", {
@@ -156,6 +172,37 @@ test("installs a named isolated world, binding and recursive iframe-only attachm
     "unknown",
   );
   expect(h.calls.length).toBe(before);
+});
+
+test("cold child resumes only after watcher installation and commands wait for real contexts and audit", async () => {
+  const h = await harness([], new Set(["cold"]));
+  const attaching = h.monitor.onEvent("Target.attachedToTarget", {
+    sessionId: "cold",
+    targetInfo: { type: "iframe" },
+    waitingForDebugger: true,
+  });
+  await h.coldResumed;
+  const pending = h.monitor.dispatch("Input.dispatchKeyEvent", { type: "keyDown", key: "a" });
+  await Promise.resolve();
+  expect(h.calls.some((call) => call.method === "Input.dispatchKeyEvent")).toBe(false);
+  const setup = h.calls.filter((call) => call.sessionId === "cold").map((call) => call.method);
+  expect(setup).toEqual([
+    "Runtime.enable",
+    "Runtime.addBinding",
+    "Page.enable",
+    "Page.addScriptToEvaluateOnNewDocument",
+    "Target.setAutoAttach",
+    "Runtime.runIfWaitingForDebugger",
+  ]);
+  await h.publishColdContexts("cold");
+  await attaching;
+  await pending;
+  expect(h.humans()).toBe(0);
+  expect(
+    h.calls.some(
+      (call) => call.sessionId === "cold" && call.method === "DOMDebugger.getEventListeners",
+    ),
+  ).toBe(true);
 });
 
 test("existing capture handlers and unrecognized listener metadata fail closed", async () => {

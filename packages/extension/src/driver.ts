@@ -199,7 +199,9 @@ export class TabDriver {
     await this.send("Page.setLifecycleEventsEnabled", { enabled: true });
     const tree = rec((await this.send("Page.getFrameTree")).frameTree);
     this.frameId = str(rec(tree.frame).id);
-    if (rec(tree.frame).url) this.url = str(rec(tree.frame).url, 10000);
+    // Keep the complete URL private: truncation before redaction can expose a
+    // protected value's prefix when it crosses the output size boundary.
+    if (rec(tree.frame).url) this.url = String(rec(tree.frame).url);
     this.checkUrl(this.url);
     await this.scanPrivacy();
   }
@@ -254,7 +256,7 @@ export class TabDriver {
       const frame = rec(params.frame);
       if (!frame.parentId) {
         this.frameId = str(frame.id);
-        this.url = str(frame.url, 10000);
+        this.url = String(frame.url ?? "");
         this.clearDocument();
         this.navigationPending = true;
         if (params.type === "BackForwardCacheRestore") this.finishNavigation();
@@ -271,7 +273,7 @@ export class TabDriver {
       return;
     }
     if (method === "Page.navigatedWithinDocument" && params.frameId === this.frameId) {
-      this.url = str(params.url, 10000);
+      this.url = String(params.url ?? "");
       this.finishNavigation();
     }
     if (
