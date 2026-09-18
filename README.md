@@ -22,6 +22,11 @@ Agents use it through an **MCP server** or a **CLI**, both on one client
 library, with the Playwright MCP tool vocabulary so existing coding harnesses
 already know how to drive it.
 
+The shared client library also provides `BrowserPeer`, the browser-side
+transport used by the extension and headless tests. Both peers verify the
+encrypted message chain before consuming messages. Browser automation and
+human consent UI remain the extension's responsibility.
+
 Status: M2 server implemented; client, MCP, CLI and headless end-to-end are in progress. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
