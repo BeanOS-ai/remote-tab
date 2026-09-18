@@ -105,3 +105,40 @@ test("bundled app serves embedded assets from an isolated output directory", asy
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("downloaded client source runs without registry access", async () => {
+  const { mkdtemp, mkdir, rm, symlink, writeFile } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { dirname, join } = await import("node:path");
+  const directory = await mkdtemp(`${tmpdir()}/remote-tab-download-`);
+  try {
+    const index = (await (await request("/client-code")).json()) as {
+      files: { path: string }[];
+    };
+    for (const { path } of index.files) {
+      const file = join(directory, path);
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, await (await request(`/client-code/${path}`)).text());
+    }
+    const scope = join(directory, "node_modules/@remote-tab");
+    await mkdir(scope, { recursive: true });
+    for (const name of ["protocol", "client"]) {
+      await symlink(`../../packages/${name}`, join(scope, name));
+    }
+    const entry = join(directory, "smoke.ts");
+    await writeFile(
+      entry,
+      'import { createSession, BrowserPeer } from "@remote-tab/client";\n' +
+        'if (typeof createSession !== "function" || typeof BrowserPeer !== "function") process.exit(1);\n',
+    );
+    const child = Bun.spawn([process.execPath, "--no-install", entry], {
+      cwd: directory,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stderr = await new Response(child.stderr).text();
+    expect(await child.exited, stderr).toBe(0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

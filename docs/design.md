@@ -314,6 +314,23 @@ per tool plus `create`, `wait-ready`, `status`, `stop`, and
 `ledger export|render`. Both are thin; if a behaviour exists in only one, it
 is a bug.
 
+The shared browser transport is `BrowserPeer`; installed extension code owns
+consent, mode/scope enforcement, redaction, and actual tab actions. Both peers
+verify every read, including their own echoed appends. The client retries a
+stale-chain append once, after verifying the new chain and resealing with a
+fresh nonce. Ledger reads verify from genesis and fetch/decrypt referenced
+blobs, including after stop or expiry.
+`stop()` calls the terminal endpoint directly, without waiting for an encrypted
+audit append or a pending poll. The ledger's status records the stopped state;
+an encrypted `stop` message is not required for shutdown.
+
+Client waits default to 120 seconds and accept a timeout and abort signal.
+After observing redemption, the client allows 10 seconds for an authenticated
+hello, then reports `hijack_suspected` and attempts terminal stop; this grace
+period is configurable for slow transports. A failed hello is suspicion,
+not proof of theft. `already_redeemed` remains the separate browser-facing
+one-shot-redeem error (§4.4). No command is sent before a valid hello.
+
 Coding harnesses: Claude Code and Codex attach the MCP server or shell out to
 the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
 `beanos-tab-share` skill is retired at cutover.
