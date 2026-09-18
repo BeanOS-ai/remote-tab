@@ -1,0 +1,12 @@
+{
+  "name": "@remote-tab/mcp",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": { "remote-tab-mcp": "src/main.ts" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@remote-tab/client": "workspace:*",
+    "zod": "4.6.5"
+  }
+}
