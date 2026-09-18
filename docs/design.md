@@ -1,0 +1,389 @@
+# remote-tab — design
+
+Status: **draft for review**. Decisions recorded here were made by Gilad on
+2026-09-18; the open questions at the end are the ones still his to make.
+License: MIT (decided 2026-09-18).
+Lineage: BeanOS "tab-share" (monorepo `deployments/beanhome/docs/tab-share.md`,
+extension "Bean Tab Share" 1.1.2, skill `beanos-tab-share`). remote-tab is the
+productised successor; the trust model is inherited, the transport is
+redesigned.
+
+## 1. One paragraph
+
+A human opens a normal Chrome tab, opens the remote-tab extension, pastes a
+short code their agent produced, picks a mode (read-only / act / full) and
+optionally "this site only", and clicks **Share**. From then until the human
+clicks **Stop** or the TTL expires, the agent can read the tab (accessibility
+snapshot, screenshots, console, network) and, in act mode, click, type, and
+navigate. Every command and result passes through a small server that holds
+only ciphertext, and every action is screenshotted and appended to a
+hash-chained ledger the human owns. When the agent hits something only the
+human should do (MFA, captcha, payment), it asks for a **handoff**: the human
+does that step and hands control back.
+
+## 2. Goals and non-goals
+
+Goals (v1):
+
+- Zero install beyond the extension. Zero accounts for the human.
+- Agent location does not matter. Only outbound HTTPS is required.
+- Human in control: visible actions, one-click stop, read-only mode, origin
+  scope, human-only TTL extension, "your turn" handoff.
+- Blind server. The operator of the server cannot read commands, results, or
+  screenshots.
+- Ledger delivered to the human. Hash-chained, exportable, renderable to a
+  GIF/video from the same session key.
+- Agents drive it through MCP **and** a CLI, sharing one client library, with
+  the Playwright MCP tool vocabulary.
+- Minimal code. Reuse existing vocabulary and browser APIs; do not build a
+  browser automation framework.
+
+Non-goals (v1), explicitly deferred:
+
+- Replaying a past session as automation ("do this again next month").
+- Enterprise policy (admin origin allowlists, SSO-bound consent, SIEM export).
+- Livestream link for third-party viewers. Designed for (see §12), not built.
+- Multi-tab or whole-window sharing. One tab. Re-sharing a new tab is fast.
+- Mobile browsers.
+- A low-latency relay (WebSocket/WebRTC). The dead-drop is fast enough for
+  LLM-paced work; §5.4 describes the upgrade path without changing trust.
+
+## 3. Roles
+
+| Role | Runs | Holds |
+|---|---|---|
+| **Human** | Chrome + remote-tab extension | the session secret (from the pasted code) |
+| **Agent** | anywhere (via client lib → MCP or CLI) | the session secret + an agent token |
+| **Server** | any host of this repo's server (BeanOS runs one; self-hostable) | ciphertext, sequence numbers, tokens; **never the secret** |
+| **Store** | Google Cloud Storage behind the server | ciphertext objects with a TTL lifecycle |
+
+## 4. Session lifecycle
+
+1. **Create.** Agent → `POST /v1/sessions` with a platform API key. Server
+   returns `{id, agent_token, expires_at}`. Server-side there is no plaintext
+   yet and never will be.
+2. **Code.** The client library generates a random 256-bit **secret** locally
+   and prints the **code** the human pastes:
+   `rt1.<session-id>.<base64url(secret)>`. The secret never reaches the
+   server: the extension sends only the session id when it redeems. The agent
+   hands the code to the human on a private channel; **the code is a bearer
+   capability and private delivery is the trust assumption** (§11). There is
+   no clickable link form in v1: a link would land on a web page, and any page
+   that can read the secret is a client that must be trusted with it (§5.5).
+3. **Redeem.** Extension → `POST /v1/sessions/{id}/redeem` with only the
+   session id. One-shot: the first redeem wins and returns `browser_token`;
+   any later redeem is refused. Redeem window: 10 minutes from create.
+4. **Hello.** Extension posts an encrypted `hello` message (mode, origin
+   scope, tab title/URL, extension version). The agent decrypts it. Hello
+   proves that the redeemer holds the secret; it does not prove who they are.
+   Two cases, kept distinct:
+   - **Only the session id leaked** (for example, it appeared in a server log
+     or a URL). A redeemer without the secret cannot produce a hello the agent
+     can decrypt. The agent stops the session and tells its user. The human,
+     when they paste the real code, sees "already redeemed" and knows too.
+   - **The complete code leaked** before the human redeemed it. The thief
+     holds the secret, wins the one-shot redeem, and can impersonate the
+     browser and read the agent's commands. Hello cannot detect this. The
+     defences are the private channel, the short redeem window, and the human
+     seeing "already redeemed" and telling the agent, which then stops the
+     session. §11 states this plainly; nothing downstream may assume more.
+5. **Drive.** Agent posts encrypted commands; extension executes, screenshots,
+   posts encrypted results. Both sides long-poll for new sequence numbers.
+6. **Handoff.** Agent posts `handoff {message}`; the extension shows a banner
+   ("the agent needs you to sign in / approve / solve this"), pauses agent
+   commands, and the human clicks **Done** to resume. The agent is blocked on
+   the `handoff_done` message.
+7. **Stop.** Either side posts `stop`. The extension detaches immediately. The
+   server refuses further commands. Stop cannot be undone; re-share is a new
+   session.
+8. **Expire.** TTL 30 minutes by default, 60 maximum. Only the extension can
+   extend (human clicks **Extend**), and only in 30-minute steps to the max.
+9. **Ledger.** After stop/expiry the human opens the ledger **in the
+   extension** (an extension page, code shipped with the extension), which
+   decrypts locally, verifies the hash chain, and offers JSON + PNG export and
+   a GIF/video render. The agent side can do the same through the CLI. The
+   server serves no ledger page (§5.5). Objects are deleted by the store's
+   lifecycle rule 24 hours after expiry; the export is the durable copy.
+
+## 5. Transport: the dead drop
+
+### 5.1 Why a server at all, and why it stays blind
+
+tab-share used signed GCS URLs as the whole transport. That worked and needed
+no server, but the extension had to trust an exact bucket list, the pasted
+value was ~880 characters (fixed later by a courier), and no third party could
+mint a share. A thin server fixes all three and gives one trust root (a
+domain) instead. It is still just a dead drop: it assigns sequence numbers,
+checks tokens, and stores blobs. End-to-end encryption means the server, its
+operator, and the store see ciphertext only. For that promise to survive a
+compromised server, the server must never be the source of code that handles
+a key: it is an API, not a web application (§5.5).
+
+### 5.2 Crypto (deliberately boring)
+
+- Secret: 32 random bytes, generated by the agent client, carried in the code.
+- Keys: `HKDF-SHA256(secret, info="remote-tab/v1/" + session-id)` → one
+  AES-256-GCM key. (WebCrypto has AES-GCM natively on both sides.)
+- Every message and blob: AES-256-GCM, 96-bit random nonce, AAD =
+  `session-id || role || seq`. Tampering or replay across sessions fails to
+  decrypt.
+- No ECDH. The code is already delivered on a private channel; a symmetric
+  secret is enough and removes a key-exchange round trip.
+- Hash chain: each message carries `prev_hash` and the server rejects a
+  message whose `prev_hash` is not the hash of the latest stored message for
+  that session. `hash = SHA-256(session-id || seq || ciphertext)`. The chain is
+  over ciphertext, so the server can enforce it blind, and the client
+  verifies it after decrypting.
+
+### 5.3 Server API (v1)
+
+All bodies are JSON unless noted. Authorization is a bearer token: the
+platform API key for create, `agent_token` or `browser_token` afterwards.
+These are the only routes; the server serves no pages (§5.5).
+
+| Method + path | Who | Purpose |
+|---|---|---|
+| `POST /v1/sessions` | agent (API key) | create; `{ttl_seconds?}` → `{id, agent_token, expires_at, redeem_until}` |
+| `POST /v1/sessions/{id}/redeem` | browser (no token) | one-shot → `{browser_token, expires_at}` |
+| `POST /v1/sessions/{id}/messages` | agent or browser | append `{role, prev_hash, nonce, ciphertext}` → `{seq, hash}` |
+| `GET /v1/sessions/{id}/messages?after={seq}&wait=25` | agent or browser | long-poll up to 25 s; returns messages after `seq` |
+| `POST /v1/sessions/{id}/blobs` | agent or browser | binary body (ciphertext), ≤ 4 MiB → `{blob_id}` |
+| `GET /v1/sessions/{id}/blobs/{blob_id}` | agent or browser | binary |
+| `POST /v1/sessions/{id}/extend` | browser only | `+1800 s`, capped at 3600 s total |
+| `POST /v1/sessions/{id}/stop` | agent or browser | terminal |
+| `GET /v1/sessions/{id}` | agent or browser | `{state, expires_at, last_seq, redeemed}` (no content) |
+
+The server keeps per-session state (tokens, state, last seq/hash, expiry) in
+a small store and message/blob bodies in GCS under
+`sessions/{id}/{seq}.bin` and `sessions/{id}/blobs/{blob_id}`. A bucket
+lifecycle rule deletes everything 24 h after `expires_at`. Message size cap
+64 KiB; larger payloads (screenshots, DOM dumps) go through blobs and the
+message carries the blob id.
+
+### 5.4 Latency and the upgrade path
+
+One round trip is one append plus one long-poll wake-up: well under a second
+when the server watches its own store, versus the multi-second polling of
+signed-URL tab-share. That is enough for LLM-paced driving. If a use case
+needs sub-second interaction (live cursor, streaming a screen), add a
+WebSocket lane on the same server that fans out messages in memory *and*
+persists them to the store. Nothing about consent, keys, or the ledger
+changes; the lane is an optimisation negotiated over the dead drop, and a
+client whose lane drops falls back to long-polling silently. WebRTC is
+possible for agents with UDP egress but is not worth its ops surface for v1.
+
+### 5.5 Custody rule: the server serves no executable code
+
+The blind-server promise (§2, §11) only holds if the secret is never handled
+by code the server delivered. A URL fragment keeps a secret out of the HTTP
+request, but not out of scripts running on the page that loaded it, and a
+compromised server could serve a script that reads the fragment and posts the
+key back. Therefore:
+
+- The server exposes the JSON API in §5.3 and nothing else. No HTML, no
+  JavaScript, no landing page for codes, no ledger viewer, no livestream
+  page. Requests for anything but the API return 404.
+- Every client that accepts a code or decrypts is **installed** code with its
+  own distribution and update channel: the packaged extension (Web Store),
+  the CLI and MCP server (npm), or a self-hoster's build of the same. Those
+  channels are the trust roots for client code; the dead-drop server is not.
+- Consequences for the rest of this design: no link form of the code (§4.2),
+  ledger viewing only in the extension or CLI (§4.9, §9), and any future
+  livestream viewer is an installed client, not a server page (§12).
+
+## 6. Protocol vocabulary
+
+Use the Playwright MCP tool names and argument shapes wherever they exist, so
+agents that already know `browser_snapshot` / `browser_click` need no
+learning curve. Snapshot returns the accessibility tree with stable `ref`
+ids; acting tools target a `ref` from the latest snapshot. Raw CSS selectors
+are not part of the vocabulary.
+
+| Tool | Mode | Notes |
+|---|---|---|
+| `browser_snapshot` | read | a11y tree, refs, URL, title |
+| `browser_take_screenshot` | read | PNG blob; optional `ref` to crop |
+| `browser_console_messages`, `browser_network_requests` | read | bounded, credential headers redacted |
+| `browser_click {ref}`, `browser_type {ref, text, submit?}`, `browser_press_key {key}`, `browser_hover {ref}`, `browser_select_option {ref, values}`, `browser_drag` | act | each acting command auto-captures one screenshot into the ledger |
+| `browser_navigate {url}`, `browser_navigate_back` | act | refused outside scope when "this site only" is set |
+| `browser_wait_for {text? \| time?}` | act | |
+| `browser_evaluate {function}` | full | only in full mode |
+| `remote_tab_handoff {message}` | any | "your turn"; blocks until `handoff_done` |
+| `remote_tab_status` | any | mode, scope, expiry, paused-by-human, last seq |
+| `remote_tab_stop` | any | terminal |
+
+Not offered: tabs, file upload, PDF save, dialogs beyond auto-dismiss with a
+reported message. Additions must clear the same bar: an agent needs it for a
+real task and it does not widen what the human consented to.
+
+## 7. Extension
+
+Evolves the published **Bean Tab Share** 1.1.2 (same Web Store listing, new
+major version) rather than a second listing. Manifest v3; permissions `tabs`,
+`scripting`, `storage`, `debugger`; host permission for the server origin only
+(the old GCS and paste-bin origins are removed after cutover).
+
+Popup: paste field, mode (read-only / act / full; full is labelled as
+scripting access), checkbox **this site only**, **Share this tab**. While
+shared: current URL, a live feed of actions in plain words ("clicked
+Submit", "typed into Search"), a **Stop** button that is always visible, an
+**Extend** button near expiry, the handoff banner with **Done**, and a
+**Paused: you took over** state with **Resume**.
+
+Behaviour:
+
+- Reads and screenshots use `chrome.debugger` (CDP) on the shared tab;
+  Chrome's "is debugging this browser" bar is expected and the popup says so.
+- Every acting command captures one screenshot after it completes. Read
+  commands do not.
+- **Origin scope** compares eTLD+1. A navigation outside scope is blocked,
+  reported to the agent as `scope_denied`, and shown to the human.
+- **Pause on human input.** Any keyboard or pointer input in the shared tab
+  flips the session to paused; queued commands return `paused`; the human
+  clicks Resume. This avoids the agent and the human fighting over a form.
+- **Redaction, kept simple.** Values of inputs whose type is `password`, or
+  whose `autocomplete` is `one-time-code` or `cc-*`, are never included in
+  snapshots or results, and those elements are masked in screenshots. No
+  configurable rules in v1.
+- Page content is untrusted. The extension never executes anything from the
+  page; the agent is told (in the tool descriptions) that snapshot text is
+  data, not instructions.
+
+## 8. Client library, MCP server, CLI
+
+`packages/client` owns sessions, crypto, transport, and the tool calls.
+`packages/mcp` is a stdio MCP server exposing §6 as tools plus
+`remote_tab_create` (prints the code for the human) and
+`remote_tab_wait_ready`. `packages/cli` is `remote-tab` with one subcommand
+per tool plus `create`, `wait-ready`, `status`, `stop`, and
+`ledger export|render`. Both are thin; if a behaviour exists in only one, it
+is a bug.
+
+Coding harnesses: Claude Code and Codex attach the MCP server or shell out to
+the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
+`beanos-tab-share` skill is retired at cutover.
+
+## 9. Ledger
+
+Every message is in the chain (§5.2). The ledger viewer is an extension
+page (or `remote-tab ledger` in the CLI); it decrypts, verifies the chain end
+to end, and shows a timeline: command, plain-words summary, screenshot,
+result. It is never served by the dead-drop server (§5.5). Export produces
+`ledger.json` + `shots/*.png`. **Render** stitches the screenshots into a GIF
+or WebM inside the extension page, keyed by the session id so the same
+session always renders the same artifact. Rendering happens in the installed
+client because the server cannot decrypt; there is no server-side media
+pipeline.
+
+## 10. Limits and defaults
+
+| Knob | Default | Max |
+|---|---|---|
+| Session TTL | 30 min | 60 min (human-only extend) |
+| Redeem window | 10 min | fixed |
+| Message | 64 KiB | fixed |
+| Blob | 4 MiB | fixed |
+| Long-poll wait | 25 s | 25 s |
+| Snapshot size | 200 KiB | fixed; agent narrows with `ref` |
+| Object retention after expiry | 24 h | fixed |
+
+## 11. Threat model (short form)
+
+- **Trust assumption: private delivery of the code.** The code carries the
+  secret. It must travel on a private, authenticated channel to the intended
+  human, and the docs, the CLI output, and the MCP tool description all say
+  so. Everything below is conditional on that.
+- **Session id leaks (without the secret).** A redeemer without the secret
+  cannot produce a decryptable hello; the agent stops the session and the
+  human sees "already redeemed". Worst case is denial of service for that
+  session.
+- **Complete code leaks before redeem.** The thief holds the secret and can
+  win the one-shot redeem, impersonate the browser, and decrypt the commands
+  the agent sends to that session. This is **not detectable
+  cryptographically**. Mitigations, not guarantees: the redeem window is
+  ≤ 10 min; the real human sees "already redeemed" and tells the agent; the
+  agent stops the session. What the thief gains is bounded but real: the
+  session is bound to a tab the thief controls, so they get no access to the
+  intended human's browser, but they do receive everything the agent sends
+  into that session, including any data the agent puts in commands (text it
+  types, URLs it opens). A stronger pairing step (for example, a confirmation the human
+  reads from the extension and returns to the agent out of band) is possible
+  and deliberately not in v1.
+- **Server or store compromised.** Attacker gets ciphertext, sequence numbers,
+  timings, and the ability to deny service. No plaintext, no keys, because no
+  client code comes from the server (§5.5). Compromise of a client
+  distribution channel (Web Store, npm) is outside this model, as it is for
+  any installed software.
+- **Malicious page.** Snapshot text and eval output are data. The extension
+  executes nothing from the page. Credential and payment fields are never
+  captured. The agent-side tool descriptions carry the same warning.
+- **Agent overreach.** Mode and scope are enforced in the extension, not the
+  agent. Read-only cannot click; "this site only" cannot leave; nothing can
+  extend the TTL from the agent side.
+- **Human surprise.** Actions are shown live, every action is screenshotted
+  into a ledger the human owns, and Stop is one click and terminal.
+
+## 12. Deferred designs (recorded so they stay consistent)
+
+- **Livestream.** A read-only viewer that long-polls the same messages and
+  decrypts locally. Per §5.5 it is an installed client (a viewer mode of the
+  extension, or the CLI), not a page served by the dead-drop server. Sharing
+  a viewer code shares the key, so the human decides.
+- **Replay as automation.** The ledger already holds the command sequence
+  with refs and screenshots; a replayer would map refs onto a fresh snapshot
+  and stop at handoff points. Not before the live path is solid.
+- **Enterprise.** Admin-pinned scope and mode, SSO-stamped consent, export to
+  SIEM. Needs an identity layer the v1 deliberately does not have.
+
+## 13. Repository layout
+
+```
+packages/protocol   message and tool schemas (shared by everything)
+packages/client     sessions, crypto, transport, tool calls (TypeScript)
+packages/mcp        stdio MCP server over client
+packages/cli        `remote-tab` over client
+packages/server     dead-drop server (Bun), Dockerfile, reference deploy doc
+packages/extension  Chrome extension (MV3), store packaging script
+docs/               this design, protocol reference, threat model
+```
+
+TypeScript throughout, Bun for tooling and the server, no framework in the
+extension. One CI job runs unit tests plus a headless end-to-end: real
+server in-process, real extension code driven by a fake tab, real client.
+
+## 14. Deployment boundary
+
+This repository ships code, a Dockerfile, and a reference deploy doc. It
+never contains a specific deployment: no domains, project ids, service
+accounts, or secrets. BeanOS deploys its instance (`tab.beanos.ai`) from the
+BeanOS monorepo's Terraform, the same way the paste-bin is deployed, and
+issues platform API keys from its own secret store.
+
+## 15. Migration for BeanOS
+
+1. Server live at `tab.beanos.ai`; BeanOS sessions get a platform key via the
+   broker.
+2. Extension 2.0 ships on the existing listing; it accepts the new code and,
+   for one release, still accepts the 1.1.2 pointer/uuid.
+3. `beanos-tab-share` skill becomes a wrapper over `remote-tab`; docs updated;
+   old GCS pointer path removed from the extension in 2.1.
+
+## 16. Milestones
+
+1. **M1** this document + skeleton merged.
+2. **M2** protocol + server + client with the headless end-to-end test green.
+3. **M3** extension 2.0 driving a real tab against the server.
+4. **M4** BeanOS cutover (§15).
+5. **M5** open-source: license, security policy, public docs, store rename.
+
+## 17. Open questions (Gilad)
+
+1. ~~License.~~ **Decided: MIT** (Gilad, 2026-09-18). `LICENSE` is in the repo
+   from the first commit so nothing has to be relicensed at open-source time.
+2. Platform API keys in v1: one static key per platform (simplest), or
+   short-lived keys minted by the platform's own broker? Recommendation:
+   static per platform for v1, rotate by replacement.
+3. Session state store: GCS-only (sequence via generation-match on a cursor
+   object) or a small Firestore/SQL table. Recommendation: GCS-only for v1;
+   the server stays stateless and there is one thing to run.
+4. Store-facing extension name at open-source time.
