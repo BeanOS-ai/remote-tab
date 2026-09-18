@@ -1,13 +1,26 @@
-// Google Cloud Storage store. Objects:
-//   sessions/{id}/state.json         session record (CAS via ifGenerationMatch)
-//   sessions/{id}/msgs/{seq:08d}.json stored message (create-only: ifGenerationMatch=0)
-//   sessions/{id}/blobs/{blobId}      ciphertext bytes
-// Sequence assignment: the state object is the cursor. append = CAS on
-// state.json (lastSeq/lastHash) then create-only write of the message object.
-// A bucket lifecycle rule deletes sessions/ objects 24h after they are written
-// past expiry (design §5.3); the server does not delete.
+// GCS cursor publication: write an immutable candidate first, then CAS state.json
+// to reference it. Losing/crashed candidates are unreachable and left to bucket
+// lifecycle cleanup; deleting them here could race a successful publication.
+//   sessions/{id}/state.json          session record + committed message pointer
+//   sessions/{id}/msgs/{uuid}.json    message + previous committed object pointer
+//   sessions/{id}/blobs/{blobId}       ciphertext bytes
 import type { Role } from "@remote-tab/protocol";
-import { ChainMismatch, type SessionRecord, type Store, type StoredMessage } from "./store";
+import {
+  ChainMismatch,
+  SessionNotActive,
+  type SessionRecord,
+  type Store,
+  type StoredMessage,
+} from "./store";
+
+interface GcsSessionRecord extends SessionRecord {
+  lastMessageObject: string | null;
+}
+
+interface GcsMessage {
+  message: StoredMessage;
+  previousObject: string | null;
+}
 
 export interface GcsStoreOptions {
   bucket: string;
@@ -75,12 +88,16 @@ export class GcsStore implements Store {
   }
 
   async createSession(record: SessionRecord): Promise<void> {
-    const r = await this.writeJson(`sessions/${record.id}/state.json`, record, "0");
+    const r = await this.writeJson(
+      `sessions/${record.id}/state.json`,
+      { ...record, lastMessageObject: null },
+      "0",
+    );
     if (!r.ok) throw new Error("duplicate session id");
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
-    return (await this.readJson<SessionRecord>(`sessions/${id}/state.json`))?.value ?? null;
+    return (await this.readJson<GcsSessionRecord>(`sessions/${id}/state.json`))?.value ?? null;
   }
 
   async updateSession(
@@ -88,11 +105,15 @@ export class GcsStore implements Store {
     mutate: (current: SessionRecord) => SessionRecord | null,
   ): Promise<SessionRecord | null> {
     for (let attempt = 0; attempt < 8; attempt++) {
-      const cur = await this.readJson<SessionRecord>(`sessions/${id}/state.json`);
+      const cur = await this.readJson<GcsSessionRecord>(`sessions/${id}/state.json`);
       if (!cur) return null;
       const next = mutate({ ...cur.value });
       if (!next) return null;
-      const r = await this.writeJson(`sessions/${id}/state.json`, next, cur.generation);
+      const r = await this.writeJson(
+        `sessions/${id}/state.json`,
+        { ...next, lastMessageObject: cur.value.lastMessageObject },
+        cur.generation,
+      );
       if (r.ok) return next;
     }
     throw new Error("gcs updateSession: too many concurrent modifications");
@@ -104,8 +125,9 @@ export class GcsStore implements Store {
     hashFor: (seq: number) => Promise<string>,
   ): Promise<StoredMessage> {
     for (let attempt = 0; attempt < 8; attempt++) {
-      const cur = await this.readJson<SessionRecord>(`sessions/${id}/state.json`);
+      const cur = await this.readJson<GcsSessionRecord>(`sessions/${id}/state.json`);
       if (!cur) throw new Error("no such session");
+      if (cur.value.state !== "active") throw new SessionNotActive();
       if (input.prevHash !== cur.value.lastHash) throw new ChainMismatch(cur.value.lastHash);
       const seq = cur.value.lastSeq + 1;
       const hash = await hashFor(seq);
@@ -118,36 +140,47 @@ export class GcsStore implements Store {
         ciphertext: input.ciphertext,
         createdAt: new Date().toISOString(),
       };
-      // Reserve the sequence number first (CAS on the cursor), then write the
-      // message object create-only. A crash between the two leaves a gap the
-      // reader reports as a chain error rather than silently skipping.
-      const reserved = await this.writeJson(
-        `sessions/${id}/state.json`,
-        { ...cur.value, lastSeq: seq, lastHash: hash },
-        cur.generation,
-      );
-      if (!reserved.ok) continue;
+      const messageObject = `sessions/${id}/msgs/${crypto.randomUUID()}.json`;
       const wrote = await this.writeJson(
-        `sessions/${id}/msgs/${String(seq).padStart(8, "0")}.json`,
-        stored,
+        messageObject,
+        { message: stored, previousObject: cur.value.lastMessageObject } satisfies GcsMessage,
         "0",
       );
-      if (!wrote.ok) throw new Error(`gcs append: message ${seq} already exists`);
+      if (!wrote.ok) throw new Error("gcs append: candidate object already exists");
+      // This CAS is the commit point. No cursor ever references an incomplete
+      // upload. On conflict, reread state to observe a competing append or stop.
+      const committed = await this.writeJson(
+        `sessions/${id}/state.json`,
+        { ...cur.value, lastSeq: seq, lastHash: hash, lastMessageObject: messageObject },
+        cur.generation,
+      );
+      if (!committed.ok) continue;
       return stored;
     }
     throw new Error("gcs appendMessage: too many concurrent modifications");
   }
 
   async listMessages(id: string, afterSeq: number, limit: number): Promise<StoredMessage[]> {
+    const cursor = await this.readJson<GcsSessionRecord>(`sessions/${id}/state.json`);
+    if (!cursor || limit <= 0 || afterSeq >= cursor.value.lastSeq) return [];
     const out: StoredMessage[] = [];
-    for (let seq = afterSeq + 1; out.length < limit; seq++) {
-      const m = await this.readJson<StoredMessage>(
-        `sessions/${id}/msgs/${String(seq).padStart(8, "0")}.json`,
-      );
-      if (!m) break;
-      out.push(m.value);
+    let object = cursor.value.lastMessageObject;
+    let expectedHash = cursor.value.lastHash;
+    // Follow one committed snapshot backwards; never expose orphan candidates.
+    // A page costs O(lastSeq - afterSeq) reads, including entries past its limit.
+    for (let seq = cursor.value.lastSeq; seq > afterSeq; seq--) {
+      if (!object) throw new Error(`gcs listMessages: missing committed message ${seq}`);
+      const entry = await this.readJson<GcsMessage>(object);
+      if (!entry) throw new Error(`gcs listMessages: missing committed message ${seq}`);
+      const { message, previousObject } = entry.value;
+      if (message.seq !== seq || message.hash !== expectedHash) {
+        throw new Error(`gcs listMessages: invalid committed message ${seq}`);
+      }
+      out.push(message);
+      object = previousObject;
+      expectedHash = message.prevHash;
     }
-    return out;
+    return out.reverse().slice(0, limit);
   }
 
   async putBlob(id: string, blobId: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {

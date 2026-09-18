@@ -1,5 +1,11 @@
 import type { Role } from "@remote-tab/protocol";
-import { ChainMismatch, type SessionRecord, type Store, type StoredMessage } from "./store";
+import {
+  ChainMismatch,
+  SessionNotActive,
+  type SessionRecord,
+  type Store,
+  type StoredMessage,
+} from "./store";
 
 /** In-process store for tests and local development. Single-instance only. */
 export class MemoryStore implements Store {
@@ -39,9 +45,18 @@ export class MemoryStore implements Store {
   ): Promise<StoredMessage> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("no such session");
+    if (session.state !== "active") throw new SessionNotActive();
     if (input.prevHash !== session.lastHash) throw new ChainMismatch(session.lastHash);
     const seq = session.lastSeq + 1;
     const hash = await hashFor(seq);
+    // Hashing yields: another append, stop, or TTL update may have committed.
+    // Revalidate and publish synchronously against the latest record.
+    const current = this.sessions.get(id);
+    if (!current) throw new Error("no such session");
+    if (current.state !== "active") throw new SessionNotActive();
+    if (current.lastSeq !== session.lastSeq || current.lastHash !== input.prevHash) {
+      throw new ChainMismatch(current.lastHash);
+    }
     const stored: StoredMessage = {
       seq,
       role: input.role,
@@ -52,7 +67,7 @@ export class MemoryStore implements Store {
       createdAt: new Date().toISOString(),
     };
     this.messages.get(id)?.push(stored);
-    this.sessions.set(id, { ...session, lastSeq: seq, lastHash: hash });
+    this.sessions.set(id, { ...current, lastSeq: seq, lastHash: hash });
     this.notify(id);
     return stored;
   }

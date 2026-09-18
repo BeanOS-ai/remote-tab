@@ -11,7 +11,13 @@ import {
   type WireMessage,
 } from "@remote-tab/protocol";
 import { b64url, chainHash } from "@remote-tab/protocol/src/crypto";
-import { ChainMismatch, type SessionRecord, type Store, type StoredMessage } from "./store";
+import {
+  ChainMismatch,
+  SessionNotActive,
+  type SessionRecord,
+  type Store,
+  type StoredMessage,
+} from "./store";
 
 export interface AppOptions {
   store: Store;
@@ -260,6 +266,9 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
           );
           return json(201, { seq: stored.seq, hash: stored.hash });
         } catch (err) {
+          if (err instanceof SessionNotActive) {
+            return fail(409, "session_not_active", err.message);
+          }
           if (err instanceof ChainMismatch) {
             return json(409, {
               error: "chain_mismatch",

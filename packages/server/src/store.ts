@@ -32,6 +32,12 @@ export class ChainMismatch extends Error {
   }
 }
 
+export class SessionNotActive extends Error {
+  constructor() {
+    super("session is stopped or expired");
+  }
+}
+
 export interface Store {
   createSession(record: SessionRecord): Promise<void>;
   getSession(id: string): Promise<SessionRecord | null>;
@@ -44,7 +50,7 @@ export interface Store {
     id: string,
     mutate: (current: SessionRecord) => SessionRecord | null,
   ): Promise<SessionRecord | null>;
-  /** Append with chain check: assigns seq = lastSeq + 1 iff prevHash === lastHash. */
+  /** Atomically append to an active chain, preserving concurrent session updates. */
   appendMessage(
     id: string,
     input: { role: Role; prevHash: string; nonce: string; ciphertext: string },
