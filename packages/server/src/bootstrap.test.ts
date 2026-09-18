@@ -18,6 +18,9 @@ test("agent docs are generated markdown with the custody caveat and all APIs", a
   expect(Buffer.byteLength(text)).toBeLessThanOrEqual(40_000);
   expect(text).toContain("trusts that server's operator with the complete shared session");
   for (const phrase of [
+    "Create needs no Authorization header on an open deployment",
+    "rate_limited",
+    "REMOTE_TAB_CREATE_PER_MINUTE",
     "HKDF",
     "AES-256-GCM",
     "handoff_done",

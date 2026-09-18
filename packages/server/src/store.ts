@@ -14,6 +14,16 @@ export interface SessionRecord {
   browserTokenHash: string | null;
   lastSeq: number;
   lastHash: string;
+  clientIp?: string;
+  /** Cumulative uploaded/reserved ciphertext bytes, including overwritten blobs. */
+  blobBytes?: number;
+}
+
+export interface SessionAdmission {
+  clientIp: string;
+  activePerIp: number;
+  activeMax: number;
+  now: Date;
 }
 
 export interface StoredMessage {
@@ -38,8 +48,14 @@ export class SessionNotActive extends Error {
   }
 }
 
+export class RateLimited extends Error {
+  constructor(public readonly retryAfterSeconds = 60) {
+    super("rate limit exceeded");
+  }
+}
+
 export interface Store {
-  createSession(record: SessionRecord): Promise<void>;
+  createSession(record: SessionRecord, admission?: SessionAdmission): Promise<void>;
   getSession(id: string): Promise<SessionRecord | null>;
   /**
    * Compare-and-swap update. `mutate` receives the current record and returns
@@ -55,9 +71,15 @@ export interface Store {
     id: string,
     input: { role: Role; prevHash: string; nonce: string; ciphertext: string },
     hashFor: (seq: number) => Promise<string>,
+    messagesMax?: number,
   ): Promise<StoredMessage>;
   listMessages(id: string, afterSeq: number, limit: number): Promise<StoredMessage[]>;
-  putBlob(id: string, blobId: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>;
+  putBlob(
+    id: string,
+    blobId: string,
+    bytes: Uint8Array<ArrayBuffer>,
+    budgetBytes?: number,
+  ): Promise<void>;
   getBlob(id: string, blobId: string): Promise<Uint8Array<ArrayBuffer> | null>;
   /** Resolves when a message with seq > afterSeq may exist, or after timeoutMs. */
   waitForMessage(id: string, afterSeq: number, timeoutMs: number): Promise<void>;

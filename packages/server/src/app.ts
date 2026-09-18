@@ -12,8 +12,10 @@ import {
 } from "@remote-tab/protocol";
 import { b64url, chainHash } from "@remote-tab/protocol/src/crypto";
 import { bootstrapResponse } from "./bootstrap";
+import { CreateRateLimiter, DEFAULT_THROTTLES, type ThrottleLimits, clientIp } from "./limits";
 import {
   ChainMismatch,
+  RateLimited,
   SessionNotActive,
   type SessionRecord,
   type Store,
@@ -23,7 +25,10 @@ import {
 export interface AppOptions {
   store: Store;
   /** platform name → API key. Keys are compared in constant time. */
-  apiKeys: ReadonlyMap<string, string>;
+  apiKeys?: ReadonlyMap<string, string>;
+  limits?: Partial<ThrottleLimits>;
+  /** Only enable behind a proxy that replaces untrusted forwarded headers. */
+  trustProxy?: boolean;
   now?: () => Date;
   /** Blob size cap; overridable in tests. */
   blobMaxBytes?: number;
@@ -81,10 +86,19 @@ function toWire(m: StoredMessage): WireMessage {
   };
 }
 
-export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<Response> } {
+export interface RequestPeer {
+  requestIP(req: Request): { address: string } | null;
+}
+
+export function createApp(opts: AppOptions): {
+  fetch: (req: Request, peer?: RequestPeer) => Promise<Response>;
+} {
   const { store } = opts;
   const now = opts.now ?? (() => new Date());
   const blobMax = opts.blobMaxBytes ?? LIMITS.blobMaxBytes;
+  const apiKeys = opts.apiKeys ?? new Map<string, string>();
+  const limits = { ...DEFAULT_THROTTLES, ...opts.limits };
+  const createRate = new CreateRateLimiter();
 
   function effectiveState(s: SessionRecord): SessionRecord {
     if (s.state !== "stopped" && s.state !== "expired" && new Date(s.expiresAt) <= now()) {
@@ -125,7 +139,7 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
     };
   }
 
-  async function handle(req: Request): Promise<Response> {
+  async function handle(req: Request, peer?: RequestPeer): Promise<Response> {
     const bootstrap = bootstrapResponse(req);
     if (bootstrap) return bootstrap;
     const url = new URL(req.url);
@@ -137,9 +151,12 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
     if (parts.length === 2) {
       if (req.method !== "POST") return fail(404, "not_found", "no such route");
       const key = bearer(req);
-      let platform: string | null = null;
-      for (const [name, k] of opts.apiKeys) if (key && constantTimeEqual(key, k)) platform = name;
+      let platform: string | null = apiKeys.size === 0 ? "open" : null;
+      for (const [name, k] of apiKeys) if (key && constantTimeEqual(key, k)) platform = name;
       if (!platform) return fail(401, "unauthorized", "invalid platform api key");
+      const ip = clientIp(req, peer?.requestIP(req)?.address, opts.trustProxy === true);
+      const retryAfter = createRate.take(ip, now().getTime(), limits.createPerMinute);
+      if (retryAfter !== null) throw new RateLimited(retryAfter);
       let body: { ttl_seconds?: unknown } = {};
       try {
         const text = await req.text();
@@ -147,6 +164,8 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
       } catch {
         return fail(400, "invalid", "body must be JSON");
       }
+      if (!body || typeof body !== "object" || Array.isArray(body))
+        return fail(400, "invalid", "body must be a JSON object");
       const ttl =
         body.ttl_seconds === undefined ? LIMITS.ttlDefaultSeconds : Number(body.ttl_seconds);
       if (!Number.isInteger(ttl) || ttl < 60)
@@ -168,7 +187,12 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
         lastSeq: 0,
         lastHash: "",
       };
-      await store.createSession(record);
+      await store.createSession(record, {
+        clientIp: ip,
+        activePerIp: limits.activePerIp,
+        activeMax: limits.activeMax,
+        now: t,
+      });
       const res: CreateSessionResponse = {
         id: record.id,
         agent_token: agentToken,
@@ -266,6 +290,7 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
               ciphertext: body.ciphertext,
             },
             (seq) => chainHash(id, seq, body.ciphertext),
+            limits.messagesMax,
           );
           return json(201, { seq: stored.seq, hash: stored.hash });
         } catch (err) {
@@ -320,7 +345,7 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
         if (bytes.byteLength > blobMax)
           return fail(413, "too_large", `blob exceeds ${blobMax} bytes`);
         const blobId = b64url(crypto.getRandomValues(new Uint8Array(18)));
-        await store.putBlob(id, blobId, bytes);
+        await store.putBlob(id, blobId, bytes, limits.blobBudgetBytes);
         return json(201, { blob_id: blobId });
       }
       if (req.method === "GET" && parts.length === 5) {
@@ -346,7 +371,12 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
       if (a.session.state !== "active")
         return fail(409, "session_not_active", `session is ${a.session.state}`);
       let exceeded = false;
+      let inactive = false;
       const updated = await store.updateSession(id, (cur) => {
+        if (effectiveState(cur).state !== "active") {
+          inactive = true;
+          return null;
+        }
         const total = cur.ttlSeconds + LIMITS.ttlDefaultSeconds;
         if (total > LIMITS.ttlMaxSeconds) {
           exceeded = true;
@@ -361,6 +391,7 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
         };
       });
       if (!updated) {
+        if (inactive) return fail(409, "session_not_active", "session is stopped or expired");
         return exceeded
           ? fail(409, "ttl_exceeded", `session already at the ${LIMITS.ttlMaxSeconds}s maximum`)
           : fail(404, "not_found", "no such session");
@@ -381,10 +412,20 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
   }
 
   return {
-    fetch: async (req: Request) => {
+    fetch: async (req: Request, peer?: RequestPeer) => {
       try {
-        return await handle(req);
+        return await handle(req, peer);
       } catch (err) {
+        if (err instanceof RateLimited) {
+          return json(
+            429,
+            { error: "rate_limited", message: err.message },
+            {
+              "retry-after": String(err.retryAfterSeconds),
+            },
+          );
+        }
+        if (err instanceof SessionNotActive) return fail(409, "session_not_active", err.message);
         console.error("remote-tab server error", err);
         return fail(500, "invalid", "internal error");
       }

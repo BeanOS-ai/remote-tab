@@ -108,6 +108,7 @@ export type ErrorCode =
   | "redeem_window_closed"
   | "session_not_active"
   | "chain_mismatch"
+  | "rate_limited"
   | "too_large"
   | "ttl_exceeded"
   | "invalid";

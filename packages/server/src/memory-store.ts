@@ -1,6 +1,8 @@
 import type { Role } from "@remote-tab/protocol";
 import {
   ChainMismatch,
+  RateLimited,
+  type SessionAdmission,
   SessionNotActive,
   type SessionRecord,
   type Store,
@@ -14,9 +16,22 @@ export class MemoryStore implements Store {
   private blobs = new Map<string, Uint8Array<ArrayBuffer>>();
   private waiters = new Map<string, Set<() => void>>();
 
-  async createSession(record: SessionRecord): Promise<void> {
+  async createSession(record: SessionRecord, admission?: SessionAdmission): Promise<void> {
     if (this.sessions.has(record.id)) throw new Error("duplicate session id");
-    this.sessions.set(record.id, { ...record });
+    if (admission) {
+      const live = [...this.sessions.values()].filter(
+        (s) =>
+          (s.state === "created" || s.state === "active") &&
+          Date.parse(s.expiresAt) > admission.now.getTime(),
+      );
+      if (
+        live.length >= admission.activeMax ||
+        live.filter((s) => s.clientIp === admission.clientIp).length >= admission.activePerIp
+      ) {
+        throw new RateLimited();
+      }
+    }
+    this.sessions.set(record.id, { ...record, ...(admission && { clientIp: admission.clientIp }) });
     this.messages.set(record.id, []);
   }
 
@@ -42,10 +57,12 @@ export class MemoryStore implements Store {
     id: string,
     input: { role: Role; prevHash: string; nonce: string; ciphertext: string },
     hashFor: (seq: number) => Promise<string>,
+    messagesMax = Number.POSITIVE_INFINITY,
   ): Promise<StoredMessage> {
     const session = this.sessions.get(id);
     if (!session) throw new Error("no such session");
     if (session.state !== "active") throw new SessionNotActive();
+    if (session.lastSeq >= messagesMax) throw new RateLimited();
     if (input.prevHash !== session.lastHash) throw new ChainMismatch(session.lastHash);
     const seq = session.lastSeq + 1;
     const hash = await hashFor(seq);
@@ -54,6 +71,7 @@ export class MemoryStore implements Store {
     const current = this.sessions.get(id);
     if (!current) throw new Error("no such session");
     if (current.state !== "active") throw new SessionNotActive();
+    if (current.lastSeq >= messagesMax) throw new RateLimited();
     if (current.lastSeq !== session.lastSeq || current.lastHash !== input.prevHash) {
       throw new ChainMismatch(current.lastHash);
     }
@@ -76,7 +94,17 @@ export class MemoryStore implements Store {
     return (this.messages.get(id) ?? []).filter((m) => m.seq > afterSeq).slice(0, limit);
   }
 
-  async putBlob(id: string, blobId: string, bytes: Uint8Array<ArrayBuffer>): Promise<void> {
+  async putBlob(
+    id: string,
+    blobId: string,
+    bytes: Uint8Array<ArrayBuffer>,
+    budgetBytes = Number.POSITIVE_INFINITY,
+  ): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session || session.state !== "active") throw new SessionNotActive();
+    const blobBytes = (session.blobBytes ?? 0) + bytes.byteLength;
+    if (blobBytes > budgetBytes) throw new RateLimited();
+    this.sessions.set(id, { ...session, blobBytes });
     this.blobs.set(`${id}/${blobId}`, bytes);
   }
 

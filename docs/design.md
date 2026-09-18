@@ -379,6 +379,37 @@ pipeline.
 | Long-poll wait | 25 s | 25 s |
 | Snapshot size | 200 KiB | fixed; agent narrows with `ref` |
 | Object retention after expiry | 24 h | fixed |
+| Creates per client IP per minute | 10 | `REMOTE_TAB_CREATE_PER_MINUTE` |
+| Concurrent sessions per client IP | 20 | `REMOTE_TAB_ACTIVE_PER_IP` |
+| Concurrent sessions globally | 500 | `REMOTE_TAB_ACTIVE_MAX` |
+| Cumulative blob bytes per session | 64 MiB | `REMOTE_TAB_BLOB_BUDGET_BYTES` |
+| Messages per session (both roles combined) | 5000 | `REMOTE_TAB_MESSAGES_MAX` |
+
+All throttles apply in open and keyed mode and accept positive integer env
+values. Exceeding one returns HTTP 429, JSON `error: "rate_limited"`, and
+`Retry-After` seconds. Session blob/message budgets are lifetime totals; they
+do not replenish by waiting. Reads and stop remain available at the cap.
+
+Client identity defaults to the socket peer (last hop). Set
+`REMOTE_TAB_TRUST_PROXY=1` only behind a trusted proxy that replaces untrusted
+`X-Forwarded-For`; then the first IP in that header identifies the client.
+Invalid/missing forwarded IPs fall back to the socket peer. IPv6 forms are
+canonicalized and IPv4-mapped peers share the IPv4 quota. Without peer
+information, requests share one `unknown` quota.
+
+The create rate uses fixed 60-second windows **per instance**, so multiple
+Cloud Run instances multiply that allowance. GCS-backed active caps are shared
+across instances through a generation-matched admission index; unredeemed
+`created` sessions count too, until stop or expiry. Memory storage is local
+only. Blob-byte reservations and message sequence counts are on the session
+record and updated atomically across GCS instances. Blob reservations happen
+before upload; failed/ambiguous uploads conservatively consume budget.
+Admission reservations similarly survive ambiguous failures until expiry.
+The shared `admission/active-sessions.json` index must be excluded from bucket
+cleanup rules. During rollout, drain old instances and allow pre-upgrade
+sessions to expire (at most 60 minutes) before relying on the active caps: old
+session records have no client IP/admission entry or historical blob-byte total.
+Operators should use consistent limit configuration on all instances.
 
 ## 11. Threat model (short form)
 
