@@ -27,8 +27,8 @@ transport used by the extension and headless tests. Both peers verify the
 encrypted message chain before consuming messages. Browser automation and
 human consent UI remain the extension's responsibility.
 
-Status: M2 server, shared agent/browser client, and MCP adapter implemented;
-CLI and headless end-to-end are next. Read [`docs/design.md`](docs/design.md). License: MIT.
+Status: M2 server, shared agent/browser client, MCP adapter, and CLI implemented;
+headless end-to-end is next. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,
@@ -132,6 +132,8 @@ All §6 tool names are commands, with JSON object arguments. `handoff`,
 `$HOME/.local/state/remote-tab/session.json`; it contains the session secret
 and token, is created mode 0600, and is never overwritten by create. Choose
 a new state path for a new session and retain old state until ledger export.
+The containing directory must be private (mode 0700); the CLI creates it
+with that mode when it does not exist.
 
 Export verifies the entire chain and decrypts attachments before writing
 `ledger.json`, `shots/*.png`, and any other blobs. Existing exports are not

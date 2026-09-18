@@ -106,7 +106,7 @@ test("bundled app serves embedded assets from an isolated output directory", asy
   }
 });
 
-test("downloaded client source runs without registry access", async () => {
+test("downloaded client and CLI source run without registry access", async () => {
   const { mkdtemp, mkdir, rm, symlink, writeFile } = await import("node:fs/promises");
   const { tmpdir } = await import("node:os");
   const { dirname, join } = await import("node:path");
@@ -122,7 +122,7 @@ test("downloaded client source runs without registry access", async () => {
     }
     const scope = join(directory, "node_modules/@remote-tab");
     await mkdir(scope, { recursive: true });
-    for (const name of ["protocol", "client"]) {
+    for (const name of ["protocol", "client", "cli"]) {
       await symlink(`../../packages/${name}`, join(scope, name));
     }
     const entry = join(directory, "smoke.ts");
@@ -138,6 +138,17 @@ test("downloaded client source runs without registry access", async () => {
     });
     const stderr = await new Response(child.stderr).text();
     expect(await child.exited, stderr).toBe(0);
+    const cli = Bun.spawn(
+      [process.execPath, "--no-install", join(directory, "packages/cli/src/main.ts"), "--help"],
+      { cwd: directory, stdout: "pipe", stderr: "pipe" },
+    );
+    const [help, errors, exit] = await Promise.all([
+      new Response(cli.stdout).text(),
+      new Response(cli.stderr).text(),
+      cli.exited,
+    ]);
+    expect(exit, errors).toBe(0);
+    expect(help).toContain("ledger");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

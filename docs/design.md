@@ -237,7 +237,7 @@ private; ledger viewing and any future livestream remain installed clients.
 - Build-time generation embeds package manifests and non-test TypeScript
   sources from `packages/protocol`, `packages/client`, and `packages/cli`
   into the server bundle. Only packages present in the build are listed
-  (the client and CLI arrive later in M2). No server source, dependencies,
+  (protocol, client, and CLI are implemented in M2). No server source, dependencies,
   node_modules, filesystem lookup at request time, or arbitrary paths.
   All entrypoints build the assets before bundling; source changes are
   included on the next build. Unknown paths and non-GET methods return 404.
@@ -337,6 +337,15 @@ session in memory. Status currently includes transport metadata and cached
 authenticated hello mode/scope. The dead-drop status has no live
 paused-by-human field; that state remains unknown until M3 adds authenticated
 browser-state reporting. It must not be inferred as false.
+
+The M2 Bun CLI accepts tool arguments as a JSON object and shares the same
+client implementation. `create` saves only the session connection state in
+a private local file (0600 inside a 0700 directory), refuses overwrite, and
+prints the code with the private-delivery warning. Later commands resume
+that file; the platform API key is not saved. Ledger export verifies and
+decrypts everything before creating a new output directory. The CLI
+`ledger render --out <file.gif|webm>` command currently reports that rendering
+arrives with the M3 extension page.
 
 Coding harnesses: Claude Code and Codex attach the MCP server or shell out to
 the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
