@@ -15,4 +15,7 @@ jobs:
       - run: bun run build
       - run: bunx biome check .
       - run: bunx tsc -p tsconfig.json
-      - run: bun test
+      - name: Unit and adapter tests
+        run: bun test packages
+      - name: Headless end-to-end lifecycle
+        run: bun test tests/e2e

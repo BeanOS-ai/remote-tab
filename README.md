@@ -28,7 +28,7 @@ encrypted message chain before consuming messages. Browser automation and
 human consent UI remain the extension's responsibility.
 
 Status: M2 server, shared agent/browser client, MCP adapter, and CLI implemented;
-headless end-to-end is next. Read [`docs/design.md`](docs/design.md). License: MIT.
+headless end-to-end tests are in progress. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,
