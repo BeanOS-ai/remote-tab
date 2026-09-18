@@ -59,3 +59,59 @@ export function parseCode(code: string): { sessionId: string; secret: string } |
 export function formatCode(sessionId: string, secret: string): string {
   return `${CODE_PREFIX}.${sessionId}.${secret}`;
 }
+
+/** Wire shapes of the dead-drop API (design §5.3). */
+export interface CreateSessionRequest {
+  ttl_seconds?: number;
+}
+export interface CreateSessionResponse {
+  id: string;
+  agent_token: string;
+  expires_at: string;
+  redeem_until: string;
+}
+export interface RedeemResponse {
+  browser_token: string;
+  expires_at: string;
+}
+export interface AppendMessageRequest {
+  role: Role;
+  prev_hash: string;
+  nonce: string;
+  ciphertext: string;
+}
+export interface AppendMessageResponse {
+  seq: number;
+  hash: string;
+}
+export interface WireMessage {
+  seq: number;
+  role: Role;
+  prev_hash: string;
+  hash: string;
+  nonce: string;
+  ciphertext: string;
+  created_at: string;
+}
+export interface SessionStatus {
+  id: string;
+  state: SessionState;
+  expires_at: string;
+  last_seq: number;
+  last_hash: string;
+  redeemed: boolean;
+}
+export type ErrorCode =
+  | "unauthorized"
+  | "not_found"
+  | "already_redeemed"
+  | "redeem_window_closed"
+  | "session_not_active"
+  | "chain_mismatch"
+  | "too_large"
+  | "ttl_exceeded"
+  | "invalid";
+export interface ErrorResponse {
+  error: ErrorCode;
+  message: string;
+}

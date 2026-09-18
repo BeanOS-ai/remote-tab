@@ -1,3 +1,9 @@
+---
+created: 2026-09-18
+last_updated: 2026-09-18
+last_reviewed: 2026-09-18
+---
+
 # remote-tab — design
 
 Status: **draft for review**. Decisions recorded here were made by Gilad on
@@ -125,8 +131,9 @@ a key: it is an API, not a web application (§5.5).
 - Keys: `HKDF-SHA256(secret, info="remote-tab/v1/" + session-id)` → one
   AES-256-GCM key. (WebCrypto has AES-GCM natively on both sides.)
 - Every message and blob: AES-256-GCM, 96-bit random nonce, AAD =
-  `session-id || role || seq`. Tampering or replay across sessions fails to
-  decrypt.
+  `session-id | role | prev_hash` (the sender knows `prev_hash`; the server
+  assigns `seq` only after the append). Tampering, replay across sessions, and
+  replay at a different chain position all fail to decrypt.
 - No ECDH. The code is already delivered on a private channel; a symmetric
   secret is enough and removes a key-exchange round trip.
 - Hash chain: each message carries `prev_hash` and the server rejects a
@@ -153,9 +160,18 @@ These are the only routes; the server serves no pages (§5.5).
 | `POST /v1/sessions/{id}/stop` | agent or browser | terminal |
 | `GET /v1/sessions/{id}` | agent or browser | `{state, expires_at, last_seq, redeemed}` (no content) |
 
-The server keeps per-session state (tokens, state, last seq/hash, expiry) in
-a small store and message/blob bodies in GCS under
-`sessions/{id}/{seq}.bin` and `sessions/{id}/blobs/{blob_id}`. A bucket
+The server keeps per-session state (tokens as SHA-256 hashes, state, last
+seq/hash, expiry) as `sessions/{id}/state.json` and message/blob bodies as
+`sessions/{id}/msgs/{uuid}.json` and `sessions/{id}/blobs/{blob_id}`, all in
+GCS. Each immutable message object points to its previous committed object.
+An append first writes its candidate message, then publishes its pointer and
+seq/hash with a generation-matched compare-and-swap on `state.json`. Readers
+follow only committed pointers and report missing committed objects as errors.
+Failed writes cannot advance the cursor; losing or crashed candidates remain
+unreachable until lifecycle cleanup. Reading a page walks the committed suffix
+backwards, costing one read per message after the requested sequence even when
+the page limit is smaller. Two server instances cannot commit the same `seq`.
+A memory store with the same interface serves tests and local development. A bucket
 lifecycle rule deletes everything 24 h after `expires_at`. Message size cap
 64 KiB; larger payloads (screenshots, DOM dumps) go through blobs and the
 message carries the blob id.
@@ -376,14 +392,14 @@ issues platform API keys from its own secret store.
 4. **M4** BeanOS cutover (§15).
 5. **M5** open-source: license, security policy, public docs, store rename.
 
-## 17. Open questions (Gilad)
+## 17. Decisions and remaining question
 
 1. ~~License.~~ **Decided: MIT** (Gilad, 2026-09-18). `LICENSE` is in the repo
    from the first commit so nothing has to be relicensed at open-source time.
-2. Platform API keys in v1: one static key per platform (simplest), or
-   short-lived keys minted by the platform's own broker? Recommendation:
-   static per platform for v1, rotate by replacement.
-3. Session state store: GCS-only (sequence via generation-match on a cursor
-   object) or a small Firestore/SQL table. Recommendation: GCS-only for v1;
-   the server stays stateless and there is one thing to run.
-4. Store-facing extension name at open-source time.
+2. **Settled for v1: static platform API keys**, configured through
+   `REMOTE_TAB_API_KEYS` as `platform:key` pairs and rotated by replacement.
+   Short-lived broker-minted platform keys are deferred.
+3. **Settled for v1: GCS-only session state**, with generation-matched cursor
+   publication (§5.3); the server stays stateless. The memory store is for
+   tests and local development.
+4. **Open (Gilad):** store-facing extension name at open-source time.
