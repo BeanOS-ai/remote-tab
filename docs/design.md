@@ -6,7 +6,7 @@ last_reviewed: 2026-09-18
 
 # remote-tab — design
 
-Status: **draft for review**. Decisions recorded here were made by Gilad on
+Status: **approved design; M2 implementation in progress**. Decisions recorded here were made by Gilad on
 2026-09-18; the open questions at the end are the ones still his to make.
 License: MIT (decided 2026-09-18).
 Lineage: BeanOS "tab-share" (monorepo `deployments/beanhome/docs/tab-share.md`,
@@ -35,8 +35,9 @@ Goals (v1):
 - Agent location does not matter. Only outbound HTTPS is required.
 - Human in control: visible actions, one-click stop, read-only mode, origin
   scope, human-only TTL extension, "your turn" handoff.
-- Blind server. The operator of the server cannot read commands, results, or
-  screenshots.
+- Blind server when both endpoints use independently trusted client code.
+  The operator cannot read commands, results, or screenshots under that
+  assumption; server-fetched agent code is the explicit exception (§5.5).
 - Ledger delivered to the human. Hash-chained, exportable, renderable to a
   GIF/video from the same session key.
 - Agents drive it through MCP **and** a CLI, sharing one client library, with
@@ -60,7 +61,7 @@ Non-goals (v1), explicitly deferred:
 |---|---|---|
 | **Human** | Chrome + remote-tab extension | the session secret (from the pasted code) |
 | **Agent** | anywhere (via client lib → MCP or CLI) | the session secret + an agent token |
-| **Server** | any host of this repo's server (BeanOS runs one; self-hostable) | ciphertext, sequence numbers, tokens; **never the secret** |
+| **Server** | any host of this repo's server (BeanOS runs one; self-hostable) | ciphertext, sequence numbers, tokens; **never the secret with independently trusted clients** (§5.5) |
 | **Store** | Google Cloud Storage behind the server | ciphertext objects with a TTL lifecycle |
 
 ## 4. Session lifecycle
@@ -120,10 +121,11 @@ no server, but the extension had to trust an exact bucket list, the pasted
 value was ~880 characters (fixed later by a courier), and no third party could
 mint a share. A thin server fixes all three and gives one trust root (a
 domain) instead. It is still just a dead drop: it assigns sequence numbers,
-checks tokens, and stores blobs. End-to-end encryption means the server, its
-operator, and the store see ciphertext only. For that promise to survive a
-compromised server, the server must never be the source of code that handles
-a key: it is an API, not a web application (§5.5).
+checks tokens, and stores blobs. With independently trusted client code, end-to-end encryption means the
+server, its operator, and the store see ciphertext only. For that promise to survive a
+compromised server, human-side code must come from the installed extension.
+Agents may deliberately trust server-supplied bootstrap source (§5.5–5.6);
+the server is an API, not a web application.
 
 ### 5.2 Crypto (deliberately boring)
 
@@ -146,7 +148,8 @@ a key: it is an API, not a web application (§5.5).
 
 All bodies are JSON unless noted. Authorization is a bearer token: the
 platform API key for create, `agent_token` or `browser_token` afterwards.
-These are the only routes; the server serves no pages (§5.5).
+The additional agent bootstrap routes are specified in §5.6; the server
+serves no pages (§5.5).
 
 | Method + path | Who | Purpose |
 |---|---|---|
@@ -188,24 +191,60 @@ changes; the lane is an optimisation negotiated over the dead drop, and a
 client whose lane drops falls back to long-polling silently. WebRTC is
 possible for agents with UDP egress but is not worth its ops surface for v1.
 
-### 5.5 Custody rule: the server serves no executable code
+### 5.5 Custody rule: no server code in the human's browser
 
-The blind-server promise (§2, §11) only holds if the secret is never handled
-by code the server delivered. A URL fragment keeps a secret out of the HTTP
-request, but not out of scripts running on the page that loaded it, and a
-compromised server could serve a script that reads the fragment and posts the
-key back. Therefore:
+The blind-server promise for the human requires that code handling their
+secret comes from the installed extension, never a page served by the
+server. A URL fragment keeps a secret out of the HTTP request but not out of
+scripts on the page. There is no landing page, code link, ledger viewer, or
+browser-executed JavaScript on this server. The extension's Web Store
+channel remains the human's client-code trust root.
 
-- The server exposes the JSON API in §5.3 and nothing else. No HTML, no
-  JavaScript, no landing page for codes, no ledger viewer, no livestream
-  page. Requests for anything but the API return 404.
-- Every client that accepts a code or decrypts is **installed** code with its
-  own distribution and update channel: the packaged extension (Web Store),
-  the CLI and MCP server (npm), or a self-hoster's build of the same. Those
-  channels are the trust roots for client code; the dead-drop server is not.
-- Consequences for the rest of this design: no link form of the code (§4.2),
-  ledger viewing only in the extension or CLI (§4.9, §9), and any future
-  livestream viewer is an installed client, not a server page (§12).
+Serving client source to the **agent** is a deliberate convenience for an
+agent with no GitHub or npm access. **An agent that runs code fetched from
+the server trusts that server's operator with the complete shared session
+key.** The agent's and human's copies are identical, not cryptographic
+"halves": compromised agent code can expose commands, browser results, and
+screenshots. This gives up the blind-server guarantee against a malicious
+operator for the whole session; the human's installed-code boundary does not
+change.
+An agent that can reach an independent package registry should prefer that
+trusted distribution, or compare the served version and SHA-256 file hashes
+against the published package. Hashes from the same server check integrity,
+not authenticity; an operator can replace both a file and its hash.
+
+The API and the two agent bootstrap surfaces below are the entire public
+surface. No HTML and no JavaScript executed by a browser; source files are
+plain downloads for agents. Everything else returns 404. Code handoff stays
+private; ledger viewing and any future livestream remain installed clients.
+
+### 5.6 Agent bootstrap without GitHub or npm (2026-09-18 addendum)
+
+- `GET /docs` returns `text/markdown; charset=utf-8`: a self-contained agent
+  quick-start covering the pasted code, all §5.3 requests and responses,
+  crypto serialization and test vectors, §6 tools, handoff, limits, and safe
+  private delivery. It includes the §5.5 trust caveat. The build generates
+  it from selected sections of this design, `docs/agent-api.md`, and the
+  checked crypto vector in `docs/crypto-vector.json`; the build rejects a
+  document larger than 40,000 UTF-8 bytes. There is no second hand-maintained
+  copy of the quick-start.
+- `GET /client-code` returns `{version, files:[{path, sha256, bytes}]}`.
+  Paths are repository-relative. `GET /client-code/<path>` returns those
+  exact UTF-8 bytes as `text/plain` or `application/typescript`, with
+  `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
+  Version is the package release version, shared across the exposed packages;
+  SHA-256 hashes cover the bytes, not a reserialized representation.
+- Build-time generation embeds package manifests and non-test TypeScript
+  sources from `packages/protocol`, `packages/client`, and `packages/cli`
+  into the server bundle. Only packages present in the build are listed
+  (the client and CLI arrive later in M2). No server source, dependencies,
+  node_modules, filesystem lookup at request time, or arbitrary paths.
+  All entrypoints build the assets before bundling; source changes are
+  included on the next build. Unknown paths and non-GET methods return 404.
+- Agents download the index, validate version and hashes against independent
+  published packages when possible, save each allowlisted file under its
+  path, and run the source with Bun. Until npm publication the hashes only
+  detect download corruption: they are not an independent trust anchor.
 
 ## 6. Protocol vocabulary
 
@@ -326,8 +365,9 @@ pipeline.
   reads from the extension and returns to the agent out of band) is possible
   and deliberately not in v1.
 - **Server or store compromised.** Attacker gets ciphertext, sequence numbers,
-  timings, and the ability to deny service. No plaintext, no keys, because no
-  client code comes from the server (§5.5). Compromise of a client
+  timings, and the ability to deny service. No plaintext or keys when both clients use independent installed code.
+  An agent executing server-fetched source explicitly trusts that operator
+  with the key (§5.5). Compromise of a client
   distribution channel (Web Store, npm) is outside this model, as it is for
   any installed software.
 - **Malicious page.** Snapshot text and eval output are data. The extension
@@ -371,13 +411,13 @@ server in-process, real extension code driven by a fake tab, real client.
 
 This repository ships code, a Dockerfile, and a reference deploy doc. It
 never contains a specific deployment: no domains, project ids, service
-accounts, or secrets. BeanOS deploys its instance (`tab.beanos.ai`) from the
+accounts, or secrets. BeanOS deploys its instance from the
 BeanOS monorepo's Terraform, the same way the paste-bin is deployed, and
 issues platform API keys from its own secret store.
 
 ## 15. Migration for BeanOS
 
-1. Server live at `tab.beanos.ai`; BeanOS sessions get a platform key via the
+1. Server live at its deployment-owned origin; BeanOS sessions get a platform key via the
    broker.
 2. Extension 2.0 ships on the existing listing; it accepts the new code and,
    for one release, still accepts the 1.1.2 pointer/uuid.

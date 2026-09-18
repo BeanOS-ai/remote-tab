@@ -3,3 +3,5 @@ dist/
 *.zip
 .env
 .env.*
+
+packages/server/src/generated/

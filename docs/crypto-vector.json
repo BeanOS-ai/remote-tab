@@ -1,0 +1,13 @@
+{
+  "session_id": "00000000-0000-4000-8000-000000000001",
+  "secret": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "key_hex": "0415dd200092a439d3defa66fce6bc5a282c4ee6dc56fece05f0580543ba54d4",
+  "role": "browser",
+  "prev_hash": "",
+  "seq": 1,
+  "aad": "00000000-0000-4000-8000-000000000001|browser|",
+  "plaintext": "{\"v\":1,\"kind\":\"hello\",\"id\":\"vector\",\"body\":{\"mode\":\"read\"}}",
+  "nonce": "AAECAwQFBgcICQoL",
+  "ciphertext": "yK0dfo-I_8BO3e4DENdT7hSZ-Z2-QuGOU-jL1zkIhD01wzEfpEWvtbIelI914yHd-0LZ9Wdz_MkDxUqzyukTQiG1Yx19kXrLqOX0",
+  "hash": "446ba35874c91d2598e143e7036331b82677841d8b281edf60c5d51349f6a100"
+}

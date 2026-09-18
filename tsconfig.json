@@ -5,7 +5,8 @@
     "moduleResolution": "bundler",
     "strict": true,
     "noEmit": true,
-    "types": ["bun"]
+    "types": ["bun"],
+    "resolveJsonModule": true
   },
-  "include": ["packages/**/*.ts"]
+  "include": ["packages/**/*.ts", "scripts/**/*.ts"]
 }
