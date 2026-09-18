@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { type Fetch, createSession } from "@remote-tab/client";
-import { MemoryStore, createApp } from "@remote-tab/server";
+import { createApp } from "../../server/src/app";
+import { MemoryStore } from "../../server/src/memory-store";
 import type { ChromeApi, Sender, Tab } from "./chrome";
 
 const origin = "https://installed-server.example";

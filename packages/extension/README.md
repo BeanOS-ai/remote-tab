@@ -32,3 +32,11 @@ message ceiling. Network inspection always redacts credential headers.
 
 PR A supplies the core. Human takeover, field masking, handoff controls, and
 ledger export are added by the following M3 changes before distribution.
+
+
+Verification: `bun test packages/extension tests/e2e/extension.test.ts` exercises
+fake-CDP enforcement and the real encrypted driver loop. With Playwright and
+Chromium installed, run `bun scripts/extension-driver-smoke.mjs` for real CDP
+fixture coverage, or `bun scripts/extension-smoke.mjs` for the complete installed
+extension/server loop. The scripts accept `PLAYWRIGHT_MODULE` and
+`CHROMIUM_EXECUTABLE` to select locally installed tooling.

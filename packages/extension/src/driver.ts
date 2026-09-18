@@ -59,8 +59,7 @@ function required(args: Record<string, unknown>, key: string): string {
     throw new DriverError("invalid", `${key} is required`);
   return args[key];
 }
-const CREDENTIAL =
-  /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|x-auth-token|x-goog-api-key|x-amz-security-token|x-csrf-token|x-xsrf-token)$/i;
+const CREDENTIAL = /authorization|cookie|token|api[-_]?key|secret|credential|csrf|xsrf/i;
 export function redactHeaders(value: unknown): Record<string, string> {
   return Object.fromEntries(
     Object.entries(rec(value))
@@ -132,6 +131,9 @@ export class TabDriver {
   private scopeError: DriverError | undefined;
   private loadedDocuments = new Set<string>();
   private loadWaiters = new Map<string, () => void>();
+  private navigationPending = false;
+  private navigationCompletions = 0;
+  private navigationWaiters = new Set<() => void>();
   constructor(
     private readonly cdp: Cdp,
     private readonly options: DriverOptions,
@@ -170,6 +172,11 @@ export class TabDriver {
   }
   async onEvent(method: string, params: Record<string, unknown> = {}): Promise<void> {
     if (
+      (method === "Page.frameStartedLoading" || method === "Page.frameStartedNavigating") &&
+      params.frameId === this.frameId
+    )
+      this.navigationPending = true;
+    if (
       method === "Page.lifecycleEvent" &&
       params.name === "load" &&
       params.frameId === this.frameId
@@ -177,6 +184,7 @@ export class TabDriver {
       const loader = str(params.loaderId);
       this.loadedDocuments.add(loader);
       this.loadWaiters.get(loader)?.();
+      this.finishNavigation();
       if (this.loadedDocuments.size > 20) {
         const oldest = this.loadedDocuments.values().next().value;
         if (oldest !== undefined) this.loadedDocuments.delete(oldest);
@@ -195,8 +203,13 @@ export class TabDriver {
           errorReason: "BlockedByClient",
         });
         for (const finish of this.loadWaiters.values()) finish();
+        this.finishNavigation();
         this.options.onNotice?.({ code: denied.code, message: denied.message });
-      } else await this.send("Fetch.continueRequest", { requestId: params.requestId });
+      } else {
+        if (params.resourceType === "Document" && params.frameId === this.frameId)
+          this.navigationPending = true;
+        await this.send("Fetch.continueRequest", { requestId: params.requestId });
+      }
       return;
     }
     if (method === "Page.frameNavigated") {
@@ -205,7 +218,11 @@ export class TabDriver {
         this.frameId = str(frame.id);
         this.url = str(frame.url, 10000);
         this.clearDocument();
+        this.navigationPending = true;
+        if (params.type === "BackForwardCacheRestore") this.finishNavigation();
         if (!isWithinScope(this.url, this.options.scope)) {
+          this.scopeError = new DriverError("scope_denied", "Shared tab left the allowed site");
+          this.finishNavigation();
           await this.send("Page.stopLoading");
           this.options.onNotice?.({
             code: "scope_lost",
@@ -215,8 +232,16 @@ export class TabDriver {
       }
       return;
     }
-    if (method === "Page.navigatedWithinDocument" && params.frameId === this.frameId)
+    if (method === "Page.navigatedWithinDocument" && params.frameId === this.frameId) {
       this.url = str(params.url, 10000);
+      this.finishNavigation();
+    }
+    if (
+      method === "Page.frameStoppedLoading" &&
+      params.frameId === this.frameId &&
+      this.navigationPending
+    )
+      this.finishNavigation();
     if (method === "DOM.documentUpdated" || method === "Runtime.executionContextsCleared")
       this.clearDocument();
     if (method === "Page.javascriptDialogOpening") {
@@ -284,6 +309,30 @@ export class TabDriver {
         this.consoleDropped++;
       }
     }
+  }
+  private finishNavigation(): void {
+    this.navigationPending = false;
+    this.navigationCompletions++;
+    for (const finish of this.navigationWaiters) finish();
+  }
+  private async waitForNavigation(after?: number): Promise<void> {
+    if (
+      this.scopeError ||
+      (after === undefined ? !this.navigationPending : this.navigationCompletions > after)
+    )
+      return;
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.navigationWaiters.delete(finish);
+        reject(new DriverError("timeout", "Navigation did not finish within 10 seconds"));
+      }, 10000);
+      const finish = () => {
+        clearTimeout(timer);
+        this.navigationWaiters.delete(finish);
+        resolve();
+      };
+      this.navigationWaiters.add(finish);
+    });
   }
   private async waitForLoad(loaderId: unknown): Promise<void> {
     if (typeof loaderId !== "string" || this.loadedDocuments.has(loaderId) || this.scopeError)
@@ -578,8 +627,13 @@ export class TabDriver {
       const entry = rec(list(history.entries)[Number(history.currentIndex) - 1]);
       if (entry.id === undefined) throw new DriverError("invalid", "No previous history entry");
       this.checkUrl(str(entry.url, 10000));
+      const completedBeforeBack = this.navigationCompletions;
       await this.send("Page.navigateToHistoryEntry", { entryId: entry.id });
       this.clearDocument();
+      // History traversal has no loaderId in its response. Arm against the
+      // completion count before sending so events arriving during CDP cannot
+      // be missed; same-document and BFCache restores also complete traversal.
+      await this.waitForNavigation(completedBeforeBack);
     } else if (tool === "browser_wait_for") {
       if ((args.text !== undefined) === (args.time !== undefined))
         throw new DriverError("invalid", "Provide exactly one of text or time");
@@ -618,6 +672,7 @@ export class TabDriver {
       if (size(result) > MAX_SNAPSHOT)
         throw new DriverError("too_large", "Evaluation result exceeds 200 KiB");
     }
+    if (isActing(tool)) await this.waitForNavigation();
     if (this.scopeError) throw this.scopeError;
     result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
     const bytes = encoder.encode(JSON.stringify(result));

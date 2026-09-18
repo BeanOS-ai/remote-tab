@@ -65,6 +65,16 @@ function fixture(options: Partial<DriverOptions> = {}) {
         return { data: btoa("png") };
       case "Page.getNavigationHistory":
         return state.history;
+      case "Page.navigateToHistoryEntry":
+        await driver.onEvent("Page.frameNavigated", {
+          frame: { id: "f1", url: state.history.entries[0].url },
+        });
+        await driver.onEvent("Page.lifecycleEvent", {
+          frameId: "f1",
+          loaderId: "history",
+          name: "load",
+        });
+        return {};
       case "Runtime.evaluate":
         return { result: { value: 42 } };
       default:
@@ -293,6 +303,86 @@ describe("CDP driver", () => {
       code: "scope_denied",
     });
   });
+  test("history response waits for load before screenshot and keeps the final redirected URL", async () => {
+    const f = fixture();
+    await f.driver.initialize();
+    f.state.hook = async (method) => (method === "Page.navigateToHistoryEntry" ? {} : undefined);
+    const operation = f.driver.execute("browser_navigate_back");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.count("Page.navigateToHistoryEntry")).toBe(1);
+    expect(f.count("Page.captureScreenshot")).toBe(0);
+    await f.driver.onEvent("Page.frameNavigated", {
+      frame: { id: "f1", url: "https://sub.example.co.uk/back-redirect" },
+    });
+    expect(f.count("Page.captureScreenshot")).toBe(0);
+    await f.driver.onEvent("Page.lifecycleEvent", {
+      frameId: "f1",
+      loaderId: "back",
+      name: "load",
+    });
+    await operation;
+    expect(f.count("Page.captureScreenshot")).toBe(1);
+    expect(result(await f.driver.execute("browser_snapshot")).url).toBe(
+      "https://sub.example.co.uk/back-redirect",
+    );
+  });
+  test.each(["same-document", "bfcache"])(
+    "history %s completion does not wait for an absent load event",
+    async (kind) => {
+      const f = fixture();
+      await f.driver.initialize();
+      f.state.hook = async (method) => {
+        if (method !== "Page.navigateToHistoryEntry") return undefined;
+        if (kind === "same-document")
+          await f.driver.onEvent("Page.navigatedWithinDocument", {
+            frameId: "f1",
+            url: "https://example.co.uk/#old",
+          });
+        else
+          await f.driver.onEvent("Page.frameNavigated", {
+            type: "BackForwardCacheRestore",
+            frame: { id: "f1", url: "https://example.co.uk/old" },
+          });
+        return {};
+      };
+      await f.driver.execute("browser_navigate_back");
+      expect(f.count("Page.captureScreenshot")).toBe(1);
+    },
+  );
+  test.each([
+    ["browser_click", { ref: "e2" }, "Input.dispatchMouseEvent", "mouseReleased"],
+    [
+      "browser_type",
+      { ref: "e3", text: "query", submit: true },
+      "Input.dispatchKeyEvent",
+      "keyDown",
+    ],
+  ] as const)(
+    "%s waits for a navigation detected during input dispatch",
+    async (tool, args, trigger, type) => {
+      const f = fixture();
+      await f.driver.initialize();
+      await f.driver.execute("browser_snapshot");
+      f.state.hook = async (method, params) => {
+        if (method === trigger && params.type === type)
+          await f.driver.onEvent("Page.frameStartedLoading", { frameId: "f1" });
+        return undefined;
+      };
+      const operation = f.driver.execute(tool, args);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(f.count("Page.captureScreenshot")).toBe(0);
+      await f.driver.onEvent("Page.frameNavigated", {
+        frame: { id: "f1", url: "https://example.co.uk/result" },
+      });
+      await f.driver.onEvent("Page.lifecycleEvent", {
+        frameId: "f1",
+        loaderId: "clicked",
+        name: "load",
+      });
+      await operation;
+      expect(f.count("Page.captureScreenshot")).toBe(1);
+    },
+  );
   test("network and console are bounded and credential headers are always redacted", async () => {
     const f = fixture();
     await f.driver.initialize();
@@ -306,6 +396,10 @@ describe("CDP driver", () => {
             AUTHORIZATION: "secret",
             Cookie: "secret",
             "x-api-key": "secret",
+            "X-CuStOm-ToKeN": "secret",
+            "X-SeCrEt-Key": "secret",
+            X_Service_Credential: "secret",
+            "X-APIKEY": "secret",
             Accept: "text/html",
           },
         },
@@ -322,6 +416,13 @@ describe("CDP driver", () => {
     const network = result(await f.driver.execute("browser_network_requests"));
     expect(JSON.stringify(network)).not.toContain("secret");
     expect(JSON.stringify(network)).toContain("[redacted]");
+    const headers = (network.entries as { requestHeaders: Record<string, string> }[])[0]
+      .requestHeaders;
+    expect(headers["X-CuStOm-ToKeN"]).toBe("[redacted]");
+    expect(headers["X-SeCrEt-Key"]).toBe("[redacted]");
+    expect(headers.X_Service_Credential).toBe("[redacted]");
+    expect(headers["X-APIKEY"]).toBe("[redacted]");
+    expect(headers.Accept).toBe("text/html");
     expect(network.dropped).toBe(100);
     expect(new TextEncoder().encode(JSON.stringify(network)).length).toBeLessThan(50 * 1024);
     const console = result(await f.driver.execute("browser_console_messages"));
