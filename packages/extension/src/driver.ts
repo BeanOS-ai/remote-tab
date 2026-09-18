@@ -1,4 +1,5 @@
 import type { Mode } from "@remote-tab/protocol";
+import type { PrivacyGuard, ScreenshotClip } from "./privacy";
 import { isWithinScope } from "./scope";
 
 export type Cdp = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -17,6 +18,7 @@ export interface DriverOptions {
   url: string;
   title: string;
   onNotice?: (notice: { code: string; message: string }) => void;
+  privacy?: PrivacyGuard;
   // Privacy layer hooks run inside the extension, before data reaches transport.
   sanitizeResult?: (value: unknown) => unknown | Promise<unknown>;
   beforeScreenshot?: () => Promise<void>;
@@ -60,13 +62,16 @@ function required(args: Record<string, unknown>, key: string): string {
   return args[key];
 }
 const CREDENTIAL = /authorization|cookie|token|api[-_]?key|secret|credential|csrf|xsrf/i;
-export function redactHeaders(value: unknown): Record<string, string> {
+export function redactHeaders(
+  value: unknown,
+  scrub: (value: unknown, max: number) => string = str,
+): Record<string, string> {
   return Object.fromEntries(
     Object.entries(rec(value))
       .slice(0, 100)
       .map(([key, val]) => [
-        key.slice(0, 100),
-        CREDENTIAL.test(key) ? "[redacted]" : str(val, 500),
+        scrub(key, 100),
+        CREDENTIAL.test(key) ? "[redacted]" : scrub(val, 500),
       ]),
   );
 }
@@ -151,6 +156,11 @@ export class TabDriver {
     if (!isWithinScope(url, this.options.scope))
       throw new DriverError("scope_denied", "Navigation is outside the shared site scope");
   }
+  private safeText(value: unknown, max = 2000): string {
+    const clean = this.options.privacy ? this.options.privacy.sanitize(String(value ?? "")) : value;
+    if (this.options.privacy && String(clean ?? "").length > max) return "[redacted: oversized]";
+    return str(clean, max);
+  }
   async initialize(): Promise<void> {
     this.checkUrl(this.url);
     // Install the interception barrier before accepting any command.
@@ -164,6 +174,7 @@ export class TabDriver {
     this.frameId = str(rec(tree.frame).id);
     if (rec(tree.frame).url) this.url = str(rec(tree.frame).url, 10000);
     this.checkUrl(this.url);
+    await this.options.privacy?.scan();
   }
   private clearDocument(): void {
     this.contextId = undefined;
@@ -254,20 +265,22 @@ export class TabDriver {
       if (method === "Network.requestWillBeSent") {
         const request = rec(params.request);
         Object.assign(entry, {
-          url: str(request.url),
-          method: str(request.method, 20),
+          url: this.safeText(request.url),
+          method: this.safeText(request.method, 20),
           type: str(params.type, 40),
-          requestHeaders: redactHeaders(request.headers),
+          requestHeaders: redactHeaders(request.headers, (value, max) => this.safeText(value, max)),
         });
       } else if (method === "Network.responseReceived") {
         const response = rec(params.response);
         Object.assign(entry, {
           status: response.status,
-          mimeType: str(response.mimeType, 100),
-          responseHeaders: redactHeaders(response.headers),
+          mimeType: this.safeText(response.mimeType, 100),
+          responseHeaders: redactHeaders(response.headers, (value, max) =>
+            this.safeText(value, max),
+          ),
         });
       } else if (method === "Network.loadingFailed")
-        Object.assign(entry, { failed: true, error: str(params.errorText, 500) });
+        Object.assign(entry, { failed: true, error: this.safeText(params.errorText, 500) });
       else if (method === "Network.loadingFinished")
         Object.assign(entry, { done: true, bytes: params.encodedDataLength });
       else return;
@@ -286,7 +299,7 @@ export class TabDriver {
           .slice(0, 10)
           .map((arg) => {
             const value = rec(arg);
-            return str(
+            return this.safeText(
               value.value === undefined
                 ? value.description
                 : typeof value.value === "string"
@@ -298,10 +311,16 @@ export class TabDriver {
       };
     if (method === "Runtime.exceptionThrown") {
       const detail = rec(params.exceptionDetails);
-      log = { level: "error", text: str(rec(detail.exception).description ?? detail.text, 1000) };
+      log = {
+        level: "error",
+        text: this.safeText(rec(detail.exception).description ?? detail.text, 1000),
+      };
     }
     if (method === "Log.entryAdded")
-      log = { level: str(rec(params.entry).level, 30), text: str(rec(params.entry).text, 1000) };
+      log = {
+        level: str(rec(params.entry).level, 30),
+        text: this.safeText(rec(params.entry).text, 1000),
+      };
     if (log) {
       this.console.push(log);
       if (this.console.length > 200) {
@@ -404,6 +423,7 @@ export class TabDriver {
   private async snapshot(ref?: string): Promise<unknown> {
     if (ref) await this.node(ref, "check");
     const response = await this.send("Accessibility.getFullAXTree");
+    await this.options.privacy?.scan();
     let nodes = list(response.nodes).map(rec);
     if (ref) {
       const root = nodes.find((node) => node.backendDOMNodeId === this.backend(ref));
@@ -438,15 +458,23 @@ export class TabDriver {
     for (const node of nodes) if (!byId.has(str(node.parentId))) walk(node, 0);
     for (const node of nodes) walk(node, 0);
     const root = nodes.find((node) => rec(node.role).value === "RootWebArea");
-    if (root) this.title = str(rec(root.name).value, 2000);
+    if (root) this.title = this.safeText(rec(root.name).value, 2000);
     const fresh = new Map<string, number>();
-    const out = { url: this.url, title: str(this.title, 2000), text: "", truncated: false };
+    const out = {
+      url: this.safeText(this.url, 10000),
+      title: this.safeText(this.title, 2000),
+      text: "",
+      truncated: false,
+    };
     let bytes = size(out);
     for (const { node, depth } of ordered) {
       if (node.ignored) continue;
       const backend = node.backendDOMNodeId;
       const role = str(rec(node.role).value, 100);
-      const name = str(rec(node.name).value, 2000);
+      const name =
+        typeof backend === "number" && this.options.privacy?.isSensitive(backend)
+          ? "[redacted]"
+          : this.safeText(rec(node.name).value, 2000);
       let refId: string | undefined;
       if (typeof backend === "number") {
         let id = this.stableRefs.get(backend);
@@ -473,7 +501,7 @@ export class TabDriver {
   }
   async screenshot(ref?: string): Promise<Uint8Array> {
     this.checkUrl(this.url);
-    let clip: Record<string, unknown> | undefined;
+    let clip: ScreenshotClip | undefined;
     if (ref) {
       await this.node(ref, "prepare");
       const model = rec(
@@ -494,17 +522,22 @@ export class TabDriver {
     }
     await this.options.beforeScreenshot?.();
     try {
-      const result = await this.send("Page.captureScreenshot", {
-        format: "png",
-        captureBeyondViewport: false,
-        ...(clip ? { clip } : {}),
-      });
-      if (typeof result.data !== "string")
-        throw new DriverError("driver_error", "Screenshot returned no data");
-      const bytes = Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0));
-      if (bytes.byteLength > 4 * 1024 * 1024)
-        throw new DriverError("too_large", "Screenshot exceeds 4 MiB");
-      return bytes;
+      const capture = async (region?: ScreenshotClip) => {
+        const result = await this.send("Page.captureScreenshot", {
+          format: "png",
+          captureBeyondViewport: false,
+          ...(region ? { clip: region } : {}),
+        });
+        if (typeof result.data !== "string")
+          throw new DriverError("driver_error", "Screenshot returned no data");
+        const bytes = Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0));
+        if (bytes.byteLength > 4 * 1024 * 1024)
+          throw new DriverError("too_large", "Screenshot exceeds 4 MiB");
+        return bytes;
+      };
+      return this.options.privacy
+        ? await this.options.privacy.screenshot(capture, clip)
+        : await capture(clip);
     } finally {
       await this.options.afterScreenshot?.();
     }
@@ -590,6 +623,7 @@ export class TabDriver {
     if ("selector" in args) throw new DriverError("invalid", "Use a snapshot ref, not a selector");
     this.checkUrl(this.url);
     this.scopeError = undefined;
+    await this.options.privacy?.scan();
     let result: unknown = { ok: true };
     if (tool === "browser_snapshot")
       result = await this.snapshot(typeof args.ref === "string" ? args.ref : undefined);
@@ -612,6 +646,8 @@ export class TabDriver {
       }
     } else if (tool === "browser_type") {
       if (typeof args.text !== "string") throw new DriverError("invalid", "text is required");
+      if (this.options.privacy?.isSensitive(this.backend(required(args, "ref"))))
+        this.options.privacy.remember(args.text);
       result = await this.node(required(args, "ref"), "type", args.text);
       if (args.submit === true) await this.key("Enter");
     } else if (tool === "browser_select_option") {
@@ -621,6 +657,8 @@ export class TabDriver {
         !args.values.every((v) => typeof v === "string")
       )
         throw new DriverError("invalid", "values must be strings");
+      if (this.options.privacy?.isSensitive(this.backend(required(args, "ref"))))
+        for (const value of args.values) this.options.privacy.remember(value);
       result = await this.node(required(args, "ref"), "select", args.values);
     } else if (tool === "browser_press_key") await this.key(required(args, "key"));
     else if (tool === "browser_drag") {
@@ -676,6 +714,11 @@ export class TabDriver {
           throw new DriverError("timeout", "Text did not appear within 10 seconds");
       }
     } else if (tool === "browser_evaluate") {
+      if (this.options.privacy?.hasSensitive)
+        throw new DriverError(
+          "privacy_denied",
+          "Scripting is unavailable while sensitive fields or uninspected embedded content are present",
+        );
       const evaluated = await this.send("Runtime.evaluate", {
         expression: `(${required(args, "function")})()`,
         returnByValue: true,
@@ -690,7 +733,13 @@ export class TabDriver {
     }
     if (isActing(tool)) await this.waitForNavigation();
     if (this.scopeError) throw this.scopeError;
+    await this.options.privacy?.scan();
+    if (this.options.privacy) result = this.options.privacy.sanitize(result);
     result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
+    const screenshot = isActing(tool) ? await this.screenshot() : undefined;
+    // Screenshot scans can discover newly filled fields. Scrub once more before
+    // constructing any transport payload, with all discovered values available.
+    if (this.options.privacy) result = this.options.privacy.sanitize(result);
     const bytes = encoder.encode(JSON.stringify(result));
     const output: DriverResult =
       bytes.length > MAX_LOG
@@ -699,7 +748,7 @@ export class TabDriver {
             blobs: [{ bytes, mimeType: "application/json" }],
           }
         : { result };
-    if (isActing(tool)) output.screenshot = await this.screenshot();
+    if (screenshot) output.screenshot = screenshot;
     if (this.scopeError) throw this.scopeError;
     return output;
   }

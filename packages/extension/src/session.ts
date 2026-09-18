@@ -24,6 +24,14 @@ export class SharedSession {
   private loop?: Promise<void>;
   private stopping?: Promise<void>;
   private expiryTimer?: ReturnType<typeof setTimeout>;
+  private takeoverEpoch = 0;
+  private actionEpoch?: number;
+  get interrupted() {
+    return (
+      this.state.paused ||
+      (this.actionEpoch !== undefined && this.actionEpoch !== this.takeoverEpoch)
+    );
+  }
   private constructor(
     readonly peer: BrowserPeer,
     readonly driver: TabDriver,
@@ -97,7 +105,13 @@ export class SharedSession {
           continue;
         }
         if (command.tool === "remote_tab_status") {
-          await this.peer.sendResult(command.id, this.state);
+          await this.peer.sendResult(command.id, {
+            mode: this.state.mode,
+            scope: this.state.scope,
+            expiresAt: this.state.expiresAt,
+            paused: this.state.paused,
+            last_seq: (await this.peer.status()).last_seq,
+          });
           continue;
         }
         if (command.tool === "remote_tab_stop") {
@@ -113,16 +127,19 @@ export class SharedSession {
           continue;
         }
         let output: Awaited<ReturnType<TabDriver["execute"]>>;
+        const actionEpoch = this.takeoverEpoch;
+        this.actionEpoch = actionEpoch;
         try {
           output = await this.driver.execute(command.tool, command.args);
         } catch (error) {
           if (this.abort.signal.aborted) break;
-          const code = this.state.paused
+          const interrupted = this.state.paused || actionEpoch !== this.takeoverEpoch;
+          const code = interrupted
             ? "paused"
             : error instanceof DriverError
               ? error.code
               : "command_failed";
-          const message = this.state.paused
+          const message = interrupted
             ? "Paused: you took over"
             : error instanceof DriverError
               ? error.message
@@ -131,9 +148,11 @@ export class SharedSession {
           this.log(message);
           await this.peer.sendError(command.id, code, message);
           continue;
+        } finally {
+          this.actionEpoch = undefined;
         }
         if (this.abort.signal.aborted) break;
-        if (this.state.paused) {
+        if (this.state.paused || actionEpoch !== this.takeoverEpoch) {
           await this.peer.sendError(command.id, "paused", "Paused: you took over");
           continue;
         }
@@ -173,7 +192,9 @@ export class SharedSession {
     if (this.state.actions.length > 50) this.state.actions.shift();
   }
   pause() {
-    if (!this.state.sharing || this.state.paused) return;
+    if (!this.state.sharing) return;
+    this.takeoverEpoch++;
+    if (this.state.paused) return;
     this.state.paused = true;
     this.state.notice = "Paused: you took over";
     this.log("Paused: you took over");

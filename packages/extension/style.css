@@ -61,3 +61,37 @@ section p {
 [hidden] {
   display: none !important;
 }
+header {
+  position: sticky;
+  top: 0;
+  background: #f7fafb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 2;
+  padding: 4px 0;
+}
+header h1 {
+  margin: 0;
+}
+header #stop {
+  width: auto;
+  min-width: 90px;
+  margin: 0;
+}
+h2 {
+  font-size: 14px;
+}
+aside {
+  background: #fff1cd;
+  border: 1px solid #d3b866;
+  border-radius: 6px;
+  padding: 10px;
+  margin: 10px 0;
+}
+#feed {
+  max-height: 180px;
+  overflow: auto;
+  padding-left: 24px;
+  font-size: 12px;
+}

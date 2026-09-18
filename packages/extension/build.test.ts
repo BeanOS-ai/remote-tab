@@ -29,7 +29,7 @@ test("browser bundle and manifest share one origin with no broad or legacy hosts
     const manifest = await Bun.file(`${out}/manifest.json`).json();
     expect(manifest.host_permissions).toEqual(["https://configured.example/*"]);
     expect(manifest.background).toEqual({ service_worker: "worker.js", type: "module" });
-    expect(manifest.minimum_chrome_version).toBe("118");
+    expect(manifest.minimum_chrome_version).toBe("125");
     const worker = await Bun.file(`${out}/worker.js`).text();
     expect(worker).toContain("https://configured.example");
     expect(worker).not.toContain("https://remote-tab.example");
