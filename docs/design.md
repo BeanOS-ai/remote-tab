@@ -147,13 +147,16 @@ the server is an API, not a web application.
 ### 5.3 Server API (v1)
 
 All bodies are JSON unless noted. Authorization is a bearer token: the
-platform API key for create, `agent_token` or `browser_token` afterwards.
+optional platform API key for create, `agent_token` or `browser_token` afterwards.
+With `REMOTE_TAB_API_KEYS` unset or empty, creation is open, including requests
+carrying a bearer. When configured, a matching platform key is required. Both
+modes enforce the throttles in §10.
 The additional agent bootstrap routes are specified in §5.6; the server
 serves no pages (§5.5).
 
 | Method + path | Who | Purpose |
 |---|---|---|
-| `POST /v1/sessions` | agent (API key) | create; `{ttl_seconds?}` → `{id, agent_token, expires_at, redeem_until}` |
+| `POST /v1/sessions` | agent (optional API key) | create; `{ttl_seconds?}` → `{id, agent_token, expires_at, redeem_until}` |
 | `POST /v1/sessions/{id}/redeem` | browser (no token) | one-shot → `{browser_token, expires_at}` |
 | `POST /v1/sessions/{id}/messages` | agent or browser | append `{role, prev_hash, nonce, ciphertext}` → `{seq, hash}` |
 | `GET /v1/sessions/{id}/messages?after={seq}&wait=25` | agent or browser | long-poll up to 25 s; returns messages after `seq` |
@@ -479,8 +482,10 @@ issues platform API keys from its own secret store.
 
 1. ~~License.~~ **Decided: MIT** (Gilad, 2026-09-18). `LICENSE` is in the repo
    from the first commit so nothing has to be relicensed at open-source time.
-2. **Settled for v1: static platform API keys**, configured through
-   `REMOTE_TAB_API_KEYS` as `platform:key` pairs and rotated by replacement.
+2. **Decided: optional platform API keys** (Gilad, 2026-09-18): “For the real
+   BeanOS deployment we shall set reasonable throttling without API key.”
+   BeanOS runs open + throttled. Operators may require static keys through
+   `REMOTE_TAB_API_KEYS` as `platform:key` pairs, rotated by replacement.
    Short-lived broker-minted platform keys are deferred.
 3. **Settled for v1: GCS-only session state**, with generation-matched cursor
    publication (§5.3); the server stays stateless. The memory store is for
