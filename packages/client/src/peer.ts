@@ -305,16 +305,18 @@ export class Peer {
     waitSeconds = 0,
     budgetMs = this.options.requestTimeoutMs,
     signal?: AbortSignal,
+    preserveAnchor = false,
   ): Promise<SessionStatus> {
     const deadline = this.options.now() + budgetMs;
     return this.exclusive(async () =>
-      this.refreshUnlocked(waitSeconds, this.checkWait(deadline, signal), signal),
+      this.refreshUnlocked(waitSeconds, this.checkWait(deadline, signal), signal, preserveAnchor),
     );
   }
   private async refreshUnlocked(
     waitSeconds = 0,
     budgetMs = this.options.requestTimeoutMs,
     signal?: AbortSignal,
+    preserveAnchor = false,
   ): Promise<SessionStatus> {
     const deadline = this.options.now() + budgetMs;
     const anchor = await this.status({ timeoutMs: budgetMs, signal });
@@ -333,8 +335,10 @@ export class Peer {
         )
       ).json()) as { messages: WireMessage[]; state: SessionStatus["state"] };
       await this.accept(page.messages);
-      // A stop/expiry observed by this read supersedes the earlier status snapshot.
-      if (page.state === "stopped" || page.state === "expired") anchor.state = page.state;
+      // Command reads must observe later stop/expiry immediately. A ledger instead
+      // binds state to the same captured sequence/hash that its entries will use.
+      if (!preserveAnchor && (page.state === "stopped" || page.state === "expired"))
+        anchor.state = page.state;
       if (this.tail().seq < anchor.last_seq && before === this.tail().seq)
         throw new RemoteTabError("chain_invalid", "Server truncated the chain");
       wait = 0;
@@ -538,7 +542,7 @@ export class Peer {
         usedBytes: 0,
       };
     }
-    const status = await reader.refresh(0, options.timeoutMs, options.signal);
+    const status = await reader.refresh(0, options.timeoutMs, options.signal, true);
     if (
       known.seq > status.last_seq ||
       (known.seq > 0 && reader.entries[known.seq - 1]?.message.hash !== known.hash)

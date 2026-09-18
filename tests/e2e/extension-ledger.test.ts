@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { type Fetch, createSession } from "@remote-tab/client";
+import { BrowserPeer, type Fetch, createSession } from "@remote-tab/client";
 import { MemoryStore, createApp } from "@remote-tab/server";
 import { makeLedgerZip, screenshots } from "../../packages/extension/src/archive";
 import { TabDriver } from "../../packages/extension/src/driver";
@@ -156,3 +156,99 @@ test("stopped extension ledger loads authenticated command/result PNGs and remai
     await share.settled();
   }
 });
+
+for (const terminal of ["stopped", "expired"] as const) {
+  test(`a ${terminal} message page cannot relabel an earlier active ledger snapshot as final`, async () => {
+    let now = Date.now();
+    const app = createApp({
+      store: new MemoryStore(),
+      apiKeys: new Map([["race", "test-key"]]),
+      now: () => new Date(now),
+    });
+    let armed = false;
+    let finishLateCommand = async () => {};
+    const observedPageStates: string[] = [];
+    const fetch: Fetch = async (request) => {
+      const response = await app.fetch(request);
+      const path = new URL(request.url).pathname;
+      if (request.method === "GET" && path.endsWith("/messages"))
+        observedPageStates.push((await response.clone().json()).state);
+      if (armed && request.method === "GET" && /\/v1\/sessions\/[^/]+$/.test(path)) {
+        // Hold the original active seq=1 status while a real command, result
+        // screenshot and terminal transition commit before its message-page GET.
+        armed = false;
+        await finishLateCommand();
+      }
+      return response;
+    };
+    const options = {
+      serverUrl: "http://ledger-race.test",
+      fetch,
+      timeoutMs: 2000,
+      pollWaitSeconds: 0,
+      pollIntervalMs: 1,
+    };
+    const { code, session } = await createSession({ ...options, apiKey: "test-key", ttl: 60 });
+    const browser = await BrowserPeer.redeem({
+      ...options,
+      code,
+      hello: { mode: "act", scope: null },
+    });
+    await session.waitReady();
+    finishLateCommand = async () => {
+      const pending = session.send("browser_take_screenshot");
+      const command = await browser.nextCommand();
+      await browser.sendResult(
+        command.id,
+        { captured: true },
+        { screenshot: { bytes: PNG, mimeType: "image/png" } },
+      );
+      expect((await pending).attachments[0].bytes).toEqual(PNG);
+      if (terminal === "stopped") await browser.stop();
+      else now += 61_000;
+    };
+    const jobs = new LedgerJobs();
+    const jobIds: string[] = [];
+    const load = async () => {
+      const id = jobs.create(browser);
+      jobIds.push(id);
+      return loadLedger(
+        id,
+        async (message) => {
+          const m = message as {
+            action: string;
+            jobId: string;
+            kind: "metadata" | "attachment";
+            offset: number;
+            entry?: number;
+            attachment?: number;
+          };
+          if (m.action === "ledger-status") return jobs.status(m.jobId);
+          if (m.action === "ledger-chunk")
+            return jobs.chunk(m.jobId, m.kind, m.offset, m.entry, m.attachment);
+          jobs.release(m.jobId);
+          return {};
+        },
+        { pollMs: 1 },
+      );
+    };
+    try {
+      armed = true;
+      const earlier = await load();
+      expect(observedPageStates).toContain(terminal);
+      expect(earlier.status.state).toBe("active");
+      expect(earlier.status.last_seq).toBe(1);
+      expect(earlier.entries).toHaveLength(1);
+      expect(screenshots(earlier)).toHaveLength(0);
+      expect(earlier.status.last_hash).toBe(earlier.entries[0].message.hash);
+      const final = await load();
+      expect(final.status.state).toBe(terminal);
+      expect(final.status.last_seq).toBe(3);
+      expect(final.entries).toHaveLength(3);
+      expect(final.status.last_hash).toBe(final.entries[2].message.hash);
+      expect(screenshots(final)).toEqual([{ seq: 3, index: 0, bytes: PNG }]);
+    } finally {
+      for (const id of jobIds) jobs.release(id);
+    }
+  });
+}

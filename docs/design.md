@@ -411,7 +411,9 @@ pipeline.
 M3 implements this as an installed `ledger.html` page. Stop opens it immediately
 while local control detaches; retrieval waits for the terminal request to settle.
 An active **View ledger** is an explicitly labeled immutable snapshot, and only
-stopped/expired snapshots enable final GIF rendering. Each transfer captures its
+stopped/expired snapshots enable final GIF rendering. Snapshot state and chain
+head come from the same captured status: a later concurrent Stop cannot label
+an earlier active snapshot as final. Each transfer captures its
 original browser peer, so a subsequent share cannot replace the history. The
 worker uses the existing peer to authenticate/decrypt and verify the ledger;
 bounded runtime-message chunks carry decrypted data, never the key, to the page.
