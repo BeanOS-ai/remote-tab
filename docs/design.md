@@ -35,8 +35,9 @@ Goals (v1):
 - Agent location does not matter. Only outbound HTTPS is required.
 - Human in control: visible actions, one-click stop, read-only mode, origin
   scope, human-only TTL extension, "your turn" handoff.
-- Blind server. The operator of the server cannot read commands, results, or
-  screenshots.
+- Blind server when both endpoints use independently trusted client code.
+  The operator cannot read commands, results, or screenshots under that
+  assumption; server-fetched agent code is the explicit exception (§5.5).
 - Ledger delivered to the human. Hash-chained, exportable, renderable to a
   GIF/video from the same session key.
 - Agents drive it through MCP **and** a CLI, sharing one client library, with
@@ -60,7 +61,7 @@ Non-goals (v1), explicitly deferred:
 |---|---|---|
 | **Human** | Chrome + remote-tab extension | the session secret (from the pasted code) |
 | **Agent** | anywhere (via client lib → MCP or CLI) | the session secret + an agent token |
-| **Server** | any host of this repo's server (BeanOS runs one; self-hostable) | ciphertext, sequence numbers, tokens; **never the secret** |
+| **Server** | any host of this repo's server (BeanOS runs one; self-hostable) | ciphertext, sequence numbers, tokens; **never the secret with independently trusted clients** (§5.5) |
 | **Store** | Google Cloud Storage behind the server | ciphertext objects with a TTL lifecycle |
 
 ## 4. Session lifecycle
@@ -120,8 +121,8 @@ no server, but the extension had to trust an exact bucket list, the pasted
 value was ~880 characters (fixed later by a courier), and no third party could
 mint a share. A thin server fixes all three and gives one trust root (a
 domain) instead. It is still just a dead drop: it assigns sequence numbers,
-checks tokens, and stores blobs. End-to-end encryption means the server, its
-operator, and the store see ciphertext only. For that promise to survive a
+checks tokens, and stores blobs. With independently trusted client code, end-to-end encryption means the
+server, its operator, and the store see ciphertext only. For that promise to survive a
 compromised server, human-side code must come from the installed extension.
 Agents may deliberately trust server-supplied bootstrap source (§5.5–5.6);
 the server is an API, not a web application.
@@ -201,9 +202,12 @@ channel remains the human's client-code trust root.
 
 Serving client source to the **agent** is a deliberate convenience for an
 agent with no GitHub or npm access. **An agent that runs code fetched from
-the server trusts that server's operator with its half of the key.** It
-therefore gives up the blind-server guarantee against a malicious operator
-for that session; the human's installed-code boundary does not change.
+the server trusts that server's operator with the complete shared session
+key.** The agent's and human's copies are identical, not cryptographic
+"halves": compromised agent code can expose commands, browser results, and
+screenshots. This gives up the blind-server guarantee against a malicious
+operator for the whole session; the human's installed-code boundary does not
+change.
 An agent that can reach an independent package registry should prefer that
 trusted distribution, or compare the served version and SHA-256 file hashes
 against the published package. Hashes from the same server check integrity,

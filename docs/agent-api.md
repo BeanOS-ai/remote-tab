@@ -26,6 +26,8 @@ workspace dependencies. Exposed sources use the same release version. Fetch
 protocol source to implement the requests below. An absent package is not
 shipped in this server build. Do not blindly execute a response: review the
 custody caveat below and verify against an independent release when possible.
+The agent holds a complete copy of the shared session key, so malicious
+bootstrap code can expose browser results and screenshots as well as commands.
 
 ### Authentication, JSON and errors
 

@@ -16,7 +16,7 @@ test("agent docs are generated markdown with the custody caveat and all APIs", a
   expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   const text = await res.text();
   expect(Buffer.byteLength(text)).toBeLessThanOrEqual(40_000);
-  expect(text).toContain("trusts that server's operator with its half of the key");
+  expect(text).toContain("trusts that server's operator with the complete shared session");
   for (const phrase of [
     "HKDF",
     "AES-256-GCM",
