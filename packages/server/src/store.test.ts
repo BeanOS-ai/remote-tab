@@ -198,6 +198,7 @@ describe("GCS cursor publication", () => {
         if (++uploads === 2) both.resolve();
         await both.promise;
       }
+      return undefined;
     };
     const results = await Promise.allSettled(
       [a, b].map((store, i) =>
@@ -222,6 +223,7 @@ describe("GCS cursor publication", () => {
         h.hooks.after = undefined;
         await h.makeStore().updateSession(record.id, (s) => ({ ...s, state: "stopped" }));
       }
+      return undefined;
     };
     await expect(append(store)).rejects.toBeInstanceOf(SessionNotActive);
     expect(await store.getSession(record.id)).toMatchObject({ state: "stopped", lastSeq: 0 });
