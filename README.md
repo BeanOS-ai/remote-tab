@@ -27,8 +27,8 @@ transport used by the extension and headless tests. Both peers verify the
 encrypted message chain before consuming messages. Browser automation and
 human consent UI remain the extension's responsibility.
 
-Status: M2 server, shared agent/browser client, and MCP adapter implemented;
-CLI and headless end-to-end are next. Read [`docs/design.md`](docs/design.md). License: MIT.
+Status: M2 server, shared agent/browser client, MCP adapter, and CLI implemented;
+headless end-to-end is next. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,
@@ -103,5 +103,41 @@ then call `remote_tab_wait_ready`. The server exposes every tool in design
 status, and stop. Tool descriptions identify page content as untrusted data.
 One MCP process holds one current session; stop it before creating another.
 Status includes transport state, expiry and sequence, plus the authenticated
-hello's mode/scope after readiness. Live human-pause state is not yet available;
+hello's mode/scope when available. Live human-pause state is not yet available;
 that requires the M3 extension's browser-state integration.
+
+## CLI
+
+The Bun binary is `remote-tab`; from a checkout, run
+`bun packages/cli/src/main.ts --help`. Create uses the same server URL and API
+key environment variables as the MCP server. Later commands use the private
+connection state saved by create, without retaining the platform API key.
+
+```sh
+CLI=packages/cli/src/main.ts
+STATE="$HOME/.local/state/remote-tab/example.json"
+bun "$CLI" create --state "$STATE" --ttl 1800
+# Deliver the returned code privately, then wait for the human to Share.
+bun "$CLI" wait-ready --state "$STATE"
+bun "$CLI" browser_snapshot '{}' --state "$STATE"
+bun "$CLI" browser_click '{"ref":"e1"}' --state "$STATE"
+bun "$CLI" handoff '{"message":"Please finish sign-in and click Done."}' --state "$STATE"
+bun "$CLI" stop --state "$STATE"
+bun "$CLI" ledger export --state "$STATE" --out ./session-ledger
+```
+
+All §6 tool names are commands, with JSON object arguments. `handoff`,
+`status`, and `stop` also alias their `remote_tab_*` names. State defaults to
+`$XDG_STATE_HOME/remote-tab/session.json` or
+`$HOME/.local/state/remote-tab/session.json`; it contains the session secret
+and token, is created mode 0600, and is never overwritten by create. Choose
+a new state path for a new session and retain old state until ledger export.
+The containing directory must be private (mode 0700); the CLI creates it
+with that mode when it does not exist.
+`status` recovers authenticated hello metadata from the verified chain,
+including in a new invocation after stop; it does not wait for redemption.
+
+Export verifies the entire chain and decrypts attachments before writing
+`ledger.json`, `shots/*.png`, and any other blobs. Existing exports are not
+overwritten. `ledger render --out session.gif` (or `.webm`) currently reports
+that rendering will arrive with the M3 extension page.

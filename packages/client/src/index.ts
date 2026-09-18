@@ -1,6 +1,7 @@
 import {
   type CreateSessionResponse,
   type RedeemResponse,
+  type SessionStatus,
   formatCode,
   parseCode,
 } from "@remote-tab/protocol";
@@ -83,6 +84,32 @@ export class AgentSession extends Peer {
   /** Contains secrets: store only in private local state (e.g. a mode-0600 CLI file). */
   exportState(): AgentConnectionState {
     return { ...this.connection };
+  }
+  /** Read current transport state plus authenticated consent, without waiting for redemption. */
+  async statusDetails(options: WaitOptions = {}): Promise<SessionStatus & { hello?: Hello }> {
+    const deadline = this.deadline(options);
+    const tail = this.tail();
+    // An already verified hello is immutable. Status need not queue behind an outstanding poll.
+    const status = this.entries.length
+      ? await super.status({
+          timeoutMs: this.checkWait(deadline, options.signal),
+          signal: options.signal,
+        })
+      : await this.refresh(0, this.checkWait(deadline, options.signal), options.signal);
+    if (
+      status.last_seq < tail.seq ||
+      (status.last_seq === tail.seq && status.last_hash !== tail.hash)
+    )
+      throw new RemoteTabError("chain_invalid", "Status rolled back the verified chain");
+    const first = this.entries[0];
+    if (!first) return status;
+    if (
+      first.envelope.kind !== "hello" ||
+      first.message.seq !== 1 ||
+      !validHello(first.envelope.body)
+    )
+      throw new RemoteTabError("protocol_invalid", "Invalid browser hello");
+    return { ...status, hello: structuredClone(first.envelope.body) };
   }
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.operation.then(fn);

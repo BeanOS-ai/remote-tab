@@ -1,0 +1,8 @@
+{
+  "name": "@remote-tab/cli",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": { "remote-tab": "src/main.ts" },
+  "dependencies": { "@remote-tab/client": "workspace:*" }
+}
