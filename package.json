@@ -4,8 +4,10 @@
   "version": "0.0.0",
   "workspaces": ["packages/*"],
   "scripts": {
-    "test": "bun test",
-    "check": "bunx biome check ."
+    "test": "bun run generate && bun test",
+    "check": "bun run generate && bunx biome check .",
+    "generate": "bun scripts/generate-bootstrap.ts",
+    "build": "bun run generate && bun build packages/server/src/main.ts --target=bun --outdir=dist"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

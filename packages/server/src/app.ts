@@ -11,6 +11,7 @@ import {
   type WireMessage,
 } from "@remote-tab/protocol";
 import { b64url, chainHash } from "@remote-tab/protocol/src/crypto";
+import { bootstrapResponse } from "./bootstrap";
 import {
   ChainMismatch,
   SessionNotActive,
@@ -125,6 +126,8 @@ export function createApp(opts: AppOptions): { fetch: (req: Request) => Promise<
   }
 
   async function handle(req: Request): Promise<Response> {
+    const bootstrap = bootstrapResponse(req);
+    if (bootstrap) return bootstrap;
     const url = new URL(req.url);
     const parts = url.pathname.split("/").filter(Boolean);
     if (parts[0] !== "v1" || parts[1] !== "sessions")

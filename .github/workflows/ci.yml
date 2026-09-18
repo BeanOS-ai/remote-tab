@@ -12,6 +12,7 @@ jobs:
         with:
           bun-version: latest
       - run: bun install --frozen-lockfile
+      - run: bun run build
       - run: bunx biome check .
       - run: bunx tsc -p tsconfig.json
       - run: bun test
