@@ -6,7 +6,7 @@ last_reviewed: 2026-09-18
 
 # remote-tab — design
 
-Status: **approved design; M2 implemented, M3 extension next**. Decisions recorded here were made by Gilad on
+Status: **approved design; M1–M3 implemented; M4 cutover and M5 public release remain**. Decisions recorded here were made by Gilad on
 2026-09-18; the open questions at the end are the ones still his to make.
 License: MIT (decided 2026-09-18).
 Lineage: BeanOS "tab-share" (monorepo `deployments/beanhome/docs/tab-share.md`,
@@ -278,8 +278,9 @@ real task and it does not widen what the human consented to.
 ## 7. Extension
 
 Evolves the published **Bean Tab Share** 1.1.2 (same Web Store listing, new
-major version) rather than a second listing. Manifest v3; permissions `tabs`,
-`scripting`, `storage`, `debugger`; host permission for the server origin only. `REMOTE_TAB_SERVER_ORIGIN` is a
+major version) rather than a second listing. Manifest v3; permissions `tabs`
+and `debugger`; host permission for the server origin only. Unused legacy
+`scripting` and `storage` permissions are omitted. `REMOTE_TAB_SERVER_ORIGIN` is a
 build-time distribution setting, compiled into both the worker and manifest; the
 repository default is `https://remote-tab.example`. Chrome 125 or newer is
 required for flattened debugger child-frame sessions. The active debugger
@@ -287,6 +288,15 @@ session keeps the MV3 service worker alive.
 Session secrets stay only in memory. Browser restart or debugger loss ends
 local control; there is no automatic resume or command replay. The human
 must start a fresh share after a restart. Built artifacts are ignored.
+
+`packages/extension/package-store.sh` builds a deterministic store ZIP from
+fresh source with an explicit HTTPS `REMOTE_TAB_SERVER_ORIGIN`; release
+packaging rejects the default placeholder. The root manifest and runtime,
+local icons, MIT license, and corresponding PSL data/license notices form an
+explicit allowlist. No test files, source maps, credentials, or deployment
+configuration enter the archive. Version is read from the extension package
+(2.0.0); the store name stays **Bean Tab Share** until the M5 naming decision.
+Packaging does not upload or publish the extension.
 
 Popup: paste field, mode (read-only / act / full; full is labelled as
 scripting access), checkbox **this site only**, **Share this tab**. While
@@ -379,9 +389,11 @@ The M2 stdio MCP adapter exposes §6 plus create/wait-ready, configured by
 session in memory. The shared client `statusDetails()` recovers verified hello
 metadata without waiting for a new hello; CLI and MCP status include
 transport metadata and authenticated hello mode/scope when available, even
-after stop. The dead-drop status has no live
-paused-by-human field; that state remains unknown until M3 adds authenticated
-browser-state reporting. It must not be inferred as false.
+after stop. The dead-drop status has no live paused-by-human field. The
+extension answers authenticated `remote_tab_status` commands with live pause
+state, but the MCP/CLI transport-status adapters do not yet request it and
+must not infer an unknown value as false. The popup shows current pause state,
+and queued browser commands receive `paused` during human takeover.
 
 The M2 Bun CLI accepts tool arguments as a JSON object and shares the same
 client implementation. `create` saves only the session connection state in
@@ -543,12 +555,12 @@ TypeScript throughout, Bun for tooling and the server, no framework in the
 extension. One CI job runs unit tests plus headless end-to-end tests: real
 server in-process, the shared browser protocol implementation (`BrowserPeer`)
 driven by a deterministic fake tab, and the real client through CLI and MCP.
-The M2 harness models snapshots, form actions, PNGs and human handoff; real
-extension tab execution, consent UI and enforcement arrive in M3.
-M3 acceptance includes extending this headless CI harness to execute the real
-extension implementation against a fake tab, including mode/scope enforcement,
-redaction and handoff. The M2 transport tests remain as regression coverage;
-they do not replace that planned extension coverage or real-tab verification.
+The M2 harness models snapshots, form actions, PNGs and human handoff. M3 adds
+the actual extension driver against fake CDP, including mode/scope enforcement,
+redaction, handoff, takeover, Stop/expiry races, and verified ledger/media export.
+Optional Chromium smoke scripts exercise actual CDP, installed extension pages,
+privacy pixels, GIF decoding, and the store archive. Transport tests remain
+regression coverage alongside these extension checks.
 
 ## 14. Deployment boundary
 
@@ -563,8 +575,11 @@ own secret store.
 
 1. Server live at its deployment-owned origin with open, throttled creation;
    BeanOS sessions need no platform key.
-2. Extension 2.0 ships on the existing listing; it accepts the new code and,
-   for one release, still accepts the 1.1.2 pointer/uuid.
+2. Extension 2.0 ships on the existing listing. The generic build accepts only
+   `rt1.` codes: the 1.1.2 short-key/pointer path requires deployment-owned
+   GCS/paste-bin origins, which are deliberately absent from generic host
+   permissions. The BeanOS distribution must carry the one-release compatibility
+   shim during M4, outside this repository.
 3. `beanos-tab-share` skill becomes a wrapper over `remote-tab`; docs updated;
    old GCS pointer path removed from the extension in 2.1.
 

@@ -3,7 +3,7 @@
   "version": "2.0.0",
   "private": true,
   "type": "module",
-  "scripts": { "build": "bun build.ts" },
+  "scripts": { "build": "bun build.ts", "package:store": "bun package-store.ts" },
   "dependencies": {
     "@remote-tab/client": "workspace:*",
     "@remote-tab/protocol": "workspace:*"

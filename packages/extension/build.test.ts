@@ -27,6 +27,17 @@ test("browser bundle and manifest share one origin with no broad or legacy hosts
   try {
     await buildExtension("https://configured.example", out);
     const manifest = await Bun.file(`${out}/manifest.json`).json();
+    expect(manifest.name).toBe("Bean Tab Share");
+    expect(manifest.version).toBe(
+      (await Bun.file(`${import.meta.dir}/package.json`).json()).version,
+    );
+    expect(manifest.permissions).toEqual(["tabs", "debugger"]);
+    expect(manifest.icons).toEqual({
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png",
+    });
+    expect(manifest.action.default_icon).toEqual(manifest.icons);
     expect(manifest.host_permissions).toEqual(["https://configured.example/*"]);
     expect(manifest.background).toEqual({ service_worker: "worker.js", type: "module" });
     expect(manifest.minimum_chrome_version).toBe("125");
@@ -35,7 +46,19 @@ test("browser bundle and manifest share one origin with no broad or legacy hosts
     expect(worker).not.toContain("https://remote-tab.example");
     expect(worker).not.toContain("storage.googleapis.com");
     expect(/(?:from|import)\s*["\']node:/.test(worker)).toBe(false);
-    for (const file of ["popup.js", "ledger.js", "ledger.html", "ledger.css"])
+    for (const file of [
+      "popup.js",
+      "ledger.js",
+      "ledger.html",
+      "ledger.css",
+      "icons/icon16.png",
+      "icons/icon48.png",
+      "icons/icon128.png",
+      "LICENSE",
+      "vendor/PSL-LICENSE",
+      "vendor/README.md",
+      "vendor/public-suffix-rules.json",
+    ])
       expect(await Bun.file(`${out}/${file}`).exists()).toBe(true);
   } finally {
     await rm(out, { recursive: true, force: true });
