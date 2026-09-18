@@ -390,7 +390,7 @@ prints the code with the private-delivery warning. Later commands resume
 that file; the platform API key is not saved. Ledger export verifies and
 decrypts everything before creating a new output directory. The CLI
 `ledger render --out <file.gif|webm>` command currently reports that rendering
-arrives with the M3 extension page.
+is available in the installed extension ledger page; CLI rendering itself remains unimplemented.
 
 Coding harnesses: Claude Code and Codex attach the MCP server or shell out to
 the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
@@ -407,6 +407,32 @@ or WebM inside the extension page, keyed by the session id so the same
 session always renders the same artifact. Rendering happens in the installed
 client because the server cannot decrypt; there is no server-side media
 pipeline.
+
+M3 implements this as an installed `ledger.html` page. Stop opens it immediately
+while local control detaches; retrieval waits for the terminal request to settle.
+An active **View ledger** is an explicitly labeled immutable snapshot, and only
+stopped/expired snapshots enable final GIF rendering. Snapshot state and chain
+head come from the same captured status: a later concurrent Stop cannot label
+an earlier active snapshot as final. Each transfer captures its
+original browser peer, so a subsequent share cannot replace the history. The
+worker uses the existing peer to authenticate/decrypt and verify the ledger;
+bounded runtime-message chunks carry decrypted data, never the key, to the page.
+The page repeats `verifyChain`, checks the final sequence/hash and attachment
+hashes, and releases the worker copy after successful transfer. Closing a viewer
+or a failed load also attempts to release its transfer slot. It then works
+from page memory even if the worker sleeps. Neither keys nor ledgers persist to
+extension storage: closing/reloading the page or restarting before export can
+lose the in-memory history.
+
+ZIP uses the CLI's `ledger.json` / `shots/*.png` / other-blob layout. The in-repo
+MIT GIF encoder uses fixed 640×360 letterboxed frames, a deterministic RGB332
+palette, one second per screenshot, and a session-id comment. No CDN, external
+media service, or dependency is required. The viewer explicitly refuses ledgers
+over 5,000 entries / 96 MiB (32 MiB transfer metadata) and GIFs over 300 screenshots;
+the shared client enforces retrieval budgets and reads attachments sequentially,
+and the viewer never silently drops entries to fit. Pending worker transfers expire after
+five minutes and at most two coexist. ZIP remains available when GIF rendering
+exceeds its limits.
 
 ## 10. Limits and defaults
 

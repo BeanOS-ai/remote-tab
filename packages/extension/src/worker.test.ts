@@ -4,6 +4,7 @@ import { until } from "../../../tests/e2e/fake-tab";
 import { createApp } from "../../server/src/app";
 import { MemoryStore } from "../../server/src/memory-store";
 import type { ChromeApi, Sender, Tab } from "./chrome";
+import { loadLedger } from "./ledger-data";
 
 const origin = "https://installed-server.example";
 const consentTab = { id: 17, url: "https://example.test/form", title: "Consented form" };
@@ -34,9 +35,11 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
   const attached: number[] = [];
   const detached: number[] = [];
   const fetchedTabs: number[] = [];
+  const createdUrls: string[] = [];
   const cdpCalls: { method: string; params: Record<string, unknown> }[] = [];
   let ownListenersRemoved = false;
   let holdNextWrite = false;
+  let holdNextStop = false;
   let statusReads = 0;
   let queries = 0;
   let tab: Tab = { ...consentTab };
@@ -66,7 +69,10 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
         if (id !== consentTab.id) throw new Error("Unexpected tab");
         return { ...tab };
       },
-      create: async () => ({}),
+      create: async ({ url }) => {
+        createdUrls.push(url);
+        return { id: 88, url };
+      },
       onRemoved: {
         addListener: (listener) => {
           onRemoved = listener;
@@ -174,6 +180,11 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
       const url = new URL(request.url);
       if (request.method === "GET" && url.pathname === `/v1/sessions/${session.sessionId}`)
         statusReads++;
+      if (holdNextStop && request.method === "POST" && url.pathname.endsWith("/stop")) {
+        holdNextStop = false;
+        reached.resolve();
+        await release.promise;
+      }
       if (holdNextWrite && request.method === "POST" && url.pathname.endsWith("/messages")) {
         holdNextWrite = false;
         reached.resolve();
@@ -195,9 +206,9 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
   });
   await import(`./worker.ts?test=${crypto.randomUUID()}`);
   const sender: Sender = { id: api.runtime.id, url: api.runtime.getURL("popup.html") };
-  const message = (value: unknown) =>
+  const message = (value: unknown, source: Sender = sender) =>
     new Promise<unknown>((resolve) => {
-      onMessage(value, sender, resolve);
+      onMessage(value, source, resolve);
     });
   cleanup = async () => {
     release.resolve();
@@ -207,6 +218,17 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
   return {
     code,
     session,
+    createdUrls,
+    ledgerMessage: (jobId: string, value: unknown) =>
+      message(value, {
+        id: api.runtime.id,
+        url: api.runtime.getURL(`ledger.html#${jobId}`),
+      }),
+    anotherSession: () =>
+      createSession({ serverUrl: origin, apiKey: "test-key", fetch: directFetch }),
+    holdNextStop: () => {
+      holdNextStop = true;
+    },
     cdpCalls,
     removeOwnListeners: () => {
       ownListenersRemoved = true;
@@ -501,4 +523,62 @@ test("missing takeover listeners terminate sharing before the next screenshot wi
   ).toHaveLength(0);
   expect(await h.message({ action: "state" })).toMatchObject({ sharing: false });
   expect((await h.session.status()).state).toBe("stopped");
+});
+
+test("Stop detaches and opens one local ledger before a delayed server stop completes", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  h.holdNextStop();
+  const stop = h.message({ action: "stop" });
+  await h.reached.promise;
+  expect(h.detached).toEqual([consentTab.id]);
+  expect(h.createdUrls).toHaveLength(1);
+  const url = new URL(h.createdUrls[0]);
+  expect(url.protocol).toBe("chrome-extension:");
+  expect(url.pathname).toBe("/ledger.html");
+  expect(h.createdUrls[0].includes(h.code)).toBe(false);
+  const jobId = url.hash.slice(1);
+  expect(await h.ledgerMessage(jobId, { action: "ledger-status", jobId })).toMatchObject({
+    state: "loading",
+  });
+  h.release.resolve();
+  expect(await stop).toEqual({ ok: true });
+  await h.message({ action: "stop" });
+  expect(h.createdUrls).toHaveLength(1);
+  const ledger = await loadLedger(jobId, (value) => h.ledgerMessage(jobId, value));
+  expect(ledger.sessionId).toBe(h.session.sessionId);
+  expect(ledger.status.state).toBe("stopped");
+  expect(ledger.entries[0].envelope.kind).toBe("hello");
+});
+
+test("ledger transfer stays bound to the stopped peer after another share starts", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  await h.message({ action: "stop" });
+  const jobId = new URL(h.createdUrls[0]).hash.slice(1);
+  const next = await h.anotherSession();
+  expect(await h.share({ code: next.code })).toEqual({ ok: true });
+  const ledger = await loadLedger(jobId, (value) => h.ledgerMessage(jobId, value));
+  expect(ledger.sessionId).toBe(h.session.sessionId);
+  expect(ledger.sessionId).not.toBe(next.session.sessionId);
+  expect((await next.session.status()).state).toBe("active");
+});
+
+test("only the matching installed ledger page can retrieve its job", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  await h.message({ action: "stop" });
+  const jobId = new URL(h.createdUrls[0]).hash.slice(1);
+  for (const source of [
+    { id: "installed-extension", url: "https://page.test/" },
+    { id: "wrong-extension", url: h.createdUrls[0] },
+    {
+      id: "installed-extension",
+      url: `chrome-extension://installed-extension/ledger.html#${crypto.randomUUID()}`,
+    },
+  ])
+    expect(h.untrusted({ action: "ledger-status", jobId }, source).accepted).toBeUndefined();
+  expect(await h.message({ action: "ledger-status", jobId })).toMatchObject({ ok: false });
+  const ledger = await loadLedger(jobId, (value) => h.ledgerMessage(jobId, value));
+  expect(ledger.status.state).toBe("stopped");
 });

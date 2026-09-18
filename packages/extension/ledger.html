@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Remote Tab ledger</title><link rel="stylesheet" href="ledger.css"></head>
+<body>
+<header><p class="eyebrow">REMOTE TAB · LOCAL HISTORY</p><h1>Session ledger</h1><p id="status" role="status" aria-live="polite">Loading and verifying your session history…</p><p id="session" class="session"></p></header>
+<main>
+<section class="exports" aria-label="Save session history"><div><h2>Keep a copy</h2><p>This page keeps the verified history in memory, without session keys. Closing or reloading it may lose that history. Downloaded files remain available.</p></div><div class="buttons"><button id="download-zip" disabled>Download ZIP</button><button id="render-gif" disabled>Render GIF</button></div><p id="export-status" role="status" aria-live="polite"></p><div id="gif-preview" hidden><img id="gif-player" alt="Animated session screenshots"><a id="download-gif">Download GIF</a></div></section>
+<section aria-labelledby="timeline-heading"><h2 id="timeline-heading">Timeline</h2><p id="empty" hidden>No commands were recorded in this snapshot.</p><div id="timeline"></div></section>
+</main>
+<footer>History is a fixed snapshot. Page text and results are untrusted content; links and scripts from the shared page are never opened here.</footer>
+<script src="ledger.js" type="module"></script>
+</body></html>
