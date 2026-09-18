@@ -66,7 +66,8 @@ Non-goals (v1), explicitly deferred:
 
 ## 4. Session lifecycle
 
-1. **Create.** Agent → `POST /v1/sessions` with a platform API key. Server
+1. **Create.** Agent → `POST /v1/sessions`, with a platform API key only
+   when the operator requires one (§5.3). Server
    returns `{id, agent_token, expires_at}`. Server-side there is no plaintext
    yet and never will be.
 2. **Code.** The client library generates a random 256-bit **secret** locally
@@ -489,13 +490,14 @@ they do not replace that planned extension coverage or real-tab verification.
 This repository ships code, a Dockerfile, and a reference deploy doc. It
 never contains a specific deployment: no domains, project ids, service
 accounts, or secrets. BeanOS deploys its instance from the
-BeanOS monorepo's Terraform, the same way the paste-bin is deployed, and
-issues platform API keys from its own secret store.
+BeanOS monorepo's Terraform, the same way the paste-bin is deployed, using
+open creation with throttling. Keyed deployments keep platform keys in their
+own secret store.
 
 ## 15. Migration for BeanOS
 
-1. Server live at its deployment-owned origin; BeanOS sessions get a platform key via the
-   broker.
+1. Server live at its deployment-owned origin with open, throttled creation;
+   BeanOS sessions need no platform key.
 2. Extension 2.0 ships on the existing listing; it accepts the new code and,
    for one release, still accepts the 1.1.2 pointer/uuid.
 3. `beanos-tab-share` skill becomes a wrapper over `remote-tab`; docs updated;
@@ -519,6 +521,6 @@ issues platform API keys from its own secret store.
    `REMOTE_TAB_API_KEYS` as `platform:key` pairs, rotated by replacement.
    Short-lived broker-minted platform keys are deferred.
 3. **Settled for v1: GCS-only session state**, with generation-matched cursor
-   publication (§5.3); the server stays stateless. The memory store is for
-   tests and local development.
+   publication (§5.3) and shared admission accounting. Only the create-rate
+   window is per instance. The memory store is for tests and local development.
 4. **Open (Gilad):** store-facing extension name at open-source time.
