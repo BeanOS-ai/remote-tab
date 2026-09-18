@@ -476,3 +476,55 @@ describe("CDP driver", () => {
       });
   });
 });
+
+test("printable key text includes Space and Shift characters but excludes shortcuts", async () => {
+  const h = fixture();
+  for (const [key, expected] of [
+    ["Space", " "],
+    ["Shift+c", "C"],
+    ["Shift+1", "!"],
+    ["Shift+;", ":"],
+    ["Shift+'", '"'],
+    ["Shift+\\", "|"],
+    ["Shift+/", "?"],
+    ["Control+a", undefined],
+    ["Alt+x", undefined],
+    ["Meta+Shift+c", undefined],
+  ] as const) {
+    await h.driver.execute("browser_press_key", { key });
+    const sent = h.calls.filter((call) => call.method === "Input.dispatchKeyEvent").at(-2);
+    expect(sent?.params.text).toBe(expected);
+    if (expected) expect(sent?.params.key).toBe(expected);
+  }
+});
+
+test("punctuation uses OEM virtual keys instead of navigation/control key codes", async () => {
+  const h = fixture();
+  for (const [key, code] of [
+    ["'", 222],
+    [";", 186],
+    [",", 188],
+    ["/", 191],
+    ["[", 219],
+    ["\\", 220],
+  ] as const) {
+    await h.driver.execute("browser_press_key", { key: `Shift+${key}` });
+    const sent = h.calls.filter((call) => call.method === "Input.dispatchKeyEvent").at(-2);
+    expect(sent?.params.windowsVirtualKeyCode).toBe(code);
+  }
+});
+
+test("literal printable symbols use physical keys and literal plus is accepted", async () => {
+  const h = fixture();
+  for (const [key, code] of [
+    ['"', 222],
+    ["!", 49],
+    ["+", 187],
+    ["?", 191],
+  ] as const) {
+    await h.driver.execute("browser_press_key", { key });
+    const sent = h.calls.filter((call) => call.method === "Input.dispatchKeyEvent").at(-2);
+    expect(sent?.params.text).toBe(key);
+    expect(sent?.params.windowsVirtualKeyCode).toBe(code);
+  }
+});

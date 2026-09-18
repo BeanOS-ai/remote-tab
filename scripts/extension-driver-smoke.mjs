@@ -107,10 +107,48 @@ try {
   });
   assert.equal(evaluated.result, "Grace");
   assert.ok(evaluated.screenshot.byteLength > 100);
+  // Inspect real input state after each CDP key event: key names alone do not
+  // cause Chromium to insert printable characters without the correct text.
+  await driver.execute("browser_type", { ref: input, text: "" });
+  for (const [key, expected] of [
+    ["a", "a"],
+    ["Space", "a "],
+    ["b", "a b"],
+    ["Shift+c", "a bC"],
+    ["Shift+1", "a bC!"],
+    ["Shift+;", "a bC!:"],
+    ["Shift+'", 'a bC!:"'],
+  ]) {
+    await driver.execute("browser_press_key", { key });
+    assert.equal(
+      await page.locator("#name").inputValue(),
+      expected,
+      `${key} must insert its printable character`,
+    );
+  }
+  await driver.execute("browser_press_key", { key: "Control+a" });
+  assert.equal(
+    await page.locator("#name").inputValue(),
+    'a bC!:"',
+    "Control shortcut must not insert text",
+  );
+  assert.deepEqual(
+    await page
+      .locator("#name")
+      .evaluate((element) => [element.selectionStart, element.selectionEnd]),
+    [0, 7],
+    "Control+A must select all input text",
+  );
+  await driver.execute("browser_press_key", { key: "z" });
+  assert.equal(
+    await page.locator("#name").inputValue(),
+    "z",
+    "Typing replaces the shortcut selection",
+  );
   assert.deepEqual(eventErrors, []);
   await cdp.detach();
   console.log(
-    "PASS: real Chromium driver AX refs, type, select, click, live PNGs, stable refs, read/act/full modes and site denial; installed extension worker loaded",
+    "PASS: real Chromium driver AX refs, type, select, click, live PNGs, stable refs, printable keys and Control shortcut, read/act/full modes and site denial; installed extension worker loaded",
   );
 } finally {
   await context?.close();

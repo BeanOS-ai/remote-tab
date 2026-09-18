@@ -519,8 +519,8 @@ export class TabDriver {
     await this.send("Input.dispatchMouseEvent", { type, x: point.x, y: point.y, ...extra });
   }
   private async key(key: string): Promise<void> {
-    const parts = key.split("+");
-    const actual = parts.pop() ?? "";
+    const parts = key.endsWith("+") ? key.slice(0, -1).split("+").filter(Boolean) : key.split("+");
+    const actual = key.endsWith("+") ? "+" : (parts.pop() ?? "");
     let modifiers = 0;
     for (const part of parts) {
       const bit = ({ Alt: 1, Control: 2, Ctrl: 2, Meta: 4, Shift: 8 } as Record<string, number>)[
@@ -544,22 +544,38 @@ export class TabDriver {
       PageUp: 33,
       PageDown: 34,
       Space: 32,
+      ";": 186,
+      "=": 187,
+      ",": 188,
+      "-": 189,
+      ".": 190,
+      "/": 191,
+      "`": 192,
+      "[": 219,
+      "\\": 220,
+      "]": 221,
+      "'": 222,
     };
     if (!actual || (actual.length !== 1 && !codes[actual]))
       throw new DriverError("invalid", "Unsupported key");
+    const unshifted = "`1234567890-=[]\\;',./";
+    const shifted = '~!@#$%^&*()_+{}|:"<>?';
+    const shiftedIndex = shifted.indexOf(actual);
+    const physical = shiftedIndex >= 0 ? unshifted[shiftedIndex] : actual;
+    let character = actual === "Space" ? " " : actual.length === 1 ? actual : "";
+    if (character && modifiers & 8) {
+      const index = unshifted.indexOf(character);
+      character = index >= 0 ? shifted[index] : character.toUpperCase();
+    }
     const data = {
-      key: actual === "Space" ? " " : actual,
+      key: character || actual,
       modifiers,
-      windowsVirtualKeyCode: codes[actual] ?? actual.toUpperCase().charCodeAt(0),
+      windowsVirtualKeyCode: codes[physical] ?? physical.toUpperCase().charCodeAt(0),
     };
     await this.send("Input.dispatchKeyEvent", {
       type: "keyDown",
       ...data,
-      ...(actual.length === 1 && !modifiers
-        ? { text: actual }
-        : actual === "Enter"
-          ? { text: "\r" }
-          : {}),
+      ...(!(modifiers & 7) && (character || actual === "Enter") ? { text: character || "\r" } : {}),
     });
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...data });
   }
