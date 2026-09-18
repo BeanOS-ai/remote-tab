@@ -6,7 +6,7 @@ last_reviewed: 2026-09-18
 
 # remote-tab — design
 
-Status: **approved design; M2 implementation in progress**. Decisions recorded here were made by Gilad on
+Status: **approved design; M2 implemented, M3 extension next**. Decisions recorded here were made by Gilad on
 2026-09-18; the open questions at the end are the ones still his to make.
 License: MIT (decided 2026-09-18).
 Lineage: BeanOS "tab-share" (monorepo `deployments/beanhome/docs/tab-share.md`,
@@ -435,12 +435,16 @@ packages/mcp        stdio MCP server over client
 packages/cli        `remote-tab` over client
 packages/server     dead-drop server (Bun), Dockerfile, reference deploy doc
 packages/extension  Chrome extension (MV3), store packaging script
+tests/e2e           fake tab over BrowserPeer, CLI and MCP lifecycle tests
 docs/               this design, protocol reference, threat model
 ```
 
 TypeScript throughout, Bun for tooling and the server, no framework in the
-extension. One CI job runs unit tests plus a headless end-to-end: real
-server in-process, real extension code driven by a fake tab, real client.
+extension. One CI job runs unit tests plus headless end-to-end tests: real
+server in-process, the shared browser protocol implementation (`BrowserPeer`)
+driven by a deterministic fake tab, and the real client through CLI and MCP.
+The M2 harness models snapshots, form actions, PNGs and human handoff; real
+extension tab execution, consent UI and enforcement arrive in M3.
 
 ## 14. Deployment boundary
 

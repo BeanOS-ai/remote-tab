@@ -27,8 +27,9 @@ transport used by the extension and headless tests. Both peers verify the
 encrypted message chain before consuming messages. Browser automation and
 human consent UI remain the extension's responsibility.
 
-Status: M2 server, shared agent/browser client, MCP adapter, and CLI implemented;
-headless end-to-end tests are in progress. Read [`docs/design.md`](docs/design.md). License: MIT.
+Status: M2 implemented: protocol, server, shared agent/browser client, MCP,
+CLI, and headless lifecycle tests. M3 is the Chrome extension driving a real
+tab. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,
@@ -141,3 +142,19 @@ Export verifies the entire chain and decrypts attachments before writing
 `ledger.json`, `shots/*.png`, and any other blobs. Existing exports are not
 overwritten. `ledger render --out session.gif` (or `.webm`) currently reports
 that rendering will arrive with the M3 extension page.
+
+## Tests and extension work
+
+Run `bun install --frozen-lockfile`, then `bun run test` for all tests or
+`bun run test:e2e` for the headless lifecycle suite. CI also builds the code,
+checks formatting and types, and runs unit/adapter and e2e tests in separate steps.
+
+The e2e harness runs the real server in process and drives a deterministic
+fake form through `BrowserPeer`, the CLI, and MCP tools. It checks form state,
+encrypted PNG round trips, human handoff, stop/expiry, hijack suspicion, and
+verified ledger export. It does not require Chrome or external services.
+
+M3 supplies the installed extension: tab consent and binding, actual browser
+actions, mode/scope enforcement and redaction, live human-pause reporting,
+and the human-owned ledger viewer with GIF/WebM rendering. The fake tab is
+a protocol test fixture, not a substitute for those extension checks.
