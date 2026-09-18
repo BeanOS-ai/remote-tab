@@ -279,8 +279,13 @@ real task and it does not widen what the human consented to.
 
 Evolves the published **Bean Tab Share** 1.1.2 (same Web Store listing, new
 major version) rather than a second listing. Manifest v3; permissions `tabs`,
-`scripting`, `storage`, `debugger`; host permission for the server origin only
-(the old GCS and paste-bin origins are removed after cutover).
+`scripting`, `storage`, `debugger`; host permission for the server origin only. `REMOTE_TAB_SERVER_ORIGIN` is a
+build-time distribution setting, compiled into both the worker and manifest; the
+repository default is `https://remote-tab.example`. Chrome 118 or newer is
+required: its active debugger session keeps the MV3 service worker alive.
+Session secrets stay only in memory. Browser restart or debugger loss ends
+local control; there is no automatic resume or command replay. The human
+must start a fresh share after a restart. Built artifacts are ignored.
 
 Popup: paste field, mode (read-only / act / full; full is labelled as
 scripting access), checkbox **this site only**, **Share this tab**. While
@@ -295,7 +300,11 @@ Behaviour:
   Chrome's "is debugging this browser" bar is expected and the popup says so.
 - Every acting command captures one screenshot after it completes. Read
   commands do not.
-- **Origin scope** compares eTLD+1. A navigation outside scope is blocked,
+- **Origin scope** compares eTLD+1 using the bundled Mozilla Public Suffix List
+  (including private suffixes; its data license and source accompany the snapshot).
+  IP addresses and local hosts are compared exactly. CDP Fetch interception
+  blocks out-of-scope document requests, including redirects and link navigation.
+  Only HTTP(S) tabs may be shared. A navigation outside scope is blocked,
   reported to the agent as `scope_denied`, and shown to the human.
 - **Pause on human input.** Any keyboard or pointer input in the shared tab
   flips the session to paused; queued commands return `paused`; the human

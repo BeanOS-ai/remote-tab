@@ -24,6 +24,14 @@
         "@remote-tab/protocol": "workspace:*",
       },
     },
+    "packages/extension": {
+      "name": "@remote-tab/extension",
+      "version": "2.0.0",
+      "dependencies": {
+        "@remote-tab/client": "workspace:*",
+        "@remote-tab/protocol": "workspace:*",
+      },
+    },
     "packages/mcp": {
       "name": "@remote-tab/mcp",
       "version": "0.0.0",
@@ -88,6 +96,8 @@
     "@remote-tab/client": ["@remote-tab/client@workspace:packages/client"],
 
     "@remote-tab/e2e": ["@remote-tab/e2e@workspace:tests/e2e"],
+
+    "@remote-tab/extension": ["@remote-tab/extension@workspace:packages/extension"],
 
     "@remote-tab/mcp": ["@remote-tab/mcp@workspace:packages/mcp"],
 

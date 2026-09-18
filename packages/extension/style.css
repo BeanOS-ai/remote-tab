@@ -1,0 +1,63 @@
+:root {
+  font: 14px / 1.5 system-ui;
+  color: #182c39;
+  background: #f7fafb;
+}
+body {
+  width: 350px;
+  margin: 0;
+  padding: 20px;
+  box-sizing: border-box;
+}
+h1 {
+  font-size: 20px;
+  margin: 0 0 12px;
+}
+label {
+  display: block;
+  margin: 8px 0;
+}
+input[type="password"] {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 9px;
+}
+fieldset {
+  border: 1px solid #bacbd3;
+  border-radius: 6px;
+  margin: 14px 0;
+}
+button {
+  width: 100%;
+  padding: 10px;
+  margin: 8px 0;
+  border: 0;
+  border-radius: 5px;
+  background: #156378;
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+}
+#stop {
+  background: #a3282d;
+  position: sticky;
+  top: 0;
+}
+#error {
+  color: #96242b;
+  white-space: pre-wrap;
+}
+#tab,
+#state {
+  overflow-wrap: anywhere;
+}
+section p {
+  font-size: 12px;
+}
+[hidden] {
+  display: none !important;
+}
