@@ -8,7 +8,6 @@ import {
   type ClientOptions,
   type CommandResult,
   type Fetch,
-  type Hello,
   PRIVATE_DELIVERY_WARNING,
   RemoteTabError,
   createSession,
@@ -121,7 +120,6 @@ async function guarded(fn: () => Promise<CallToolResult>): Promise<CallToolResul
 export function createMcpServer(options: McpOptions): McpServer {
   const server = new McpServer({ name: "remote-tab", version: "0.0.0" });
   let current: AgentSession | undefined;
-  let hello: Hello | undefined;
   let creating = false;
   const session = () => {
     if (!current) throw new RemoteTabError("invalid", "Create a remote tab session first");
@@ -163,7 +161,6 @@ export function createMcpServer(options: McpOptions): McpServer {
             ttl: args.ttl,
           });
           current = created.session;
-          hello = undefined;
           return json({ code: created.code, warning: PRIVATE_DELIVERY_WARNING });
         } finally {
           creating = false;
@@ -178,10 +175,7 @@ export function createMcpServer(options: McpOptions): McpServer {
     },
     (args, extra) =>
       guarded(async () => {
-        const active = session();
-        const ready = await active.waitReady({ ...args, signal: extra.signal });
-        if (current === active) hello = ready;
-        return json(ready);
+        return json(await session().waitReady({ ...args, signal: extra.signal }));
       }),
   );
   server.registerTool(
@@ -191,12 +185,7 @@ export function createMcpServer(options: McpOptions): McpServer {
       inputSchema: empty,
     },
     (_args, extra) =>
-      guarded(async () =>
-        json({
-          ...(await session().status({ signal: extra.signal })),
-          ...(hello ? { hello } : {}),
-        }),
-      ),
+      guarded(async () => json(await session().statusDetails({ signal: extra.signal }))),
   );
   server.registerTool(
     "remote_tab_stop",

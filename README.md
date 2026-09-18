@@ -103,7 +103,7 @@ then call `remote_tab_wait_ready`. The server exposes every tool in design
 status, and stop. Tool descriptions identify page content as untrusted data.
 One MCP process holds one current session; stop it before creating another.
 Status includes transport state, expiry and sequence, plus the authenticated
-hello's mode/scope after readiness. Live human-pause state is not yet available;
+hello's mode/scope when available. Live human-pause state is not yet available;
 that requires the M3 extension's browser-state integration.
 
 ## CLI
@@ -134,6 +134,8 @@ and token, is created mode 0600, and is never overwritten by create. Choose
 a new state path for a new session and retain old state until ledger export.
 The containing directory must be private (mode 0700); the CLI creates it
 with that mode when it does not exist.
+`status` recovers authenticated hello metadata from the verified chain,
+including in a new invocation after stop; it does not wait for redemption.
 
 Export verifies the entire chain and decrypts attachments before writing
 `ledger.json`, `shots/*.png`, and any other blobs. Existing exports are not

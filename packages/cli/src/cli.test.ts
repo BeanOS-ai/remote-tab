@@ -173,6 +173,9 @@ test("subprocess create → ready → snapshot + attachments → handoff → sto
   try {
     const created = await cli(["create", ...shared], h.env);
     expect(created.exit).toBe(0);
+    const unredeemed = (await cli(["status", ...shared])).json;
+    expect(unredeemed.state).toBe("created");
+    expect(unredeemed.hello).toBeUndefined();
     const timeout = await cli(["wait-ready", "--state", state, "--timeout-ms", "30"]);
     expect(timeout.json.error.code).toBe("timeout");
     const browser = await BrowserPeer.redeem({
@@ -184,7 +187,10 @@ test("subprocess create → ready → snapshot + attachments → handoff → sto
       timeoutMs: 3000,
     });
     expect((await cli(["wait-ready", ...shared])).json).toMatchObject({ mode: "act" });
-    expect((await cli(["remote_tab_status", ...shared])).json.state).toBe("active");
+    expect((await cli(["remote_tab_status", ...shared])).json).toMatchObject({
+      state: "active",
+      hello: { mode: "act", scope: "https://example.test" },
+    });
     const commandResult = cli(["browser_snapshot", '{"ref":"e1"}', ...shared]);
     const command = await browser.nextCommand();
     expect(command).toMatchObject({ tool: "browser_snapshot", args: { ref: "e1" } });
@@ -214,6 +220,10 @@ test("subprocess create → ready → snapshot + attachments → handoff → sto
     await browser.sendError(denied.id, "scope_violation", "Outside shared site");
     expect((await failure).exit).toBe(1);
     expect((await cli(["stop", ...shared])).json.state).toBe("stopped");
+    expect((await cli(["status", ...shared])).json).toMatchObject({
+      state: "stopped",
+      hello: { mode: "act", scope: "https://example.test" },
+    });
     const out = join(root, "ledger");
     const exported = await cli(["ledger", "export", "--out", out, ...shared]);
     expect(exported.exit).toBe(0);

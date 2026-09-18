@@ -69,6 +69,120 @@ async function rawAppend(
 }
 
 describe("client lifecycle", () => {
+  test("status details recover authenticated consent after resume and stop without waiting or fetching blobs", async () => {
+    const h = setup();
+    const opts = { fetch: h.fetch, ...quick };
+    const { code, session } = await createSession({ serverUrl, apiKey, ...opts });
+    expect(await session.statusDetails()).toMatchObject({ state: "created" });
+    expect((await session.statusDetails()).hello).toBeUndefined();
+    const browser = await BrowserPeer.redeem({ serverUrl, code, hello, ...opts });
+    expect(await AgentSession.resume(session.exportState(), opts).statusDetails()).toMatchObject({
+      state: "active",
+      hello,
+    });
+    const pending = session.send("browser_take_screenshot");
+    const command = await browser.nextCommand();
+    await browser.sendResult(
+      command.id,
+      {},
+      { screenshot: { bytes: new Uint8Array([1]), mimeType: "image/png" } },
+    );
+    await pending;
+    await session.stop();
+    const requests: string[] = [];
+    const fetch: Fetch = (request) => {
+      requests.push(new URL(request.url).pathname);
+      return h.fetch(request);
+    };
+    const details = await AgentSession.resume(session.exportState(), {
+      ...quick,
+      fetch,
+    }).statusDetails();
+    expect(details).toMatchObject({ state: "stopped", hello });
+    expect(requests.some((path) => path.includes("/blobs/"))).toBe(false);
+    const corrupt: Fetch = async (request) => {
+      const response = await h.fetch(request);
+      if (!new URL(request.url).pathname.endsWith("/messages")) return response;
+      const body = await response.json();
+      body.messages[0].hash = "f".repeat(64);
+      return Response.json(body);
+    };
+    await expect(
+      AgentSession.resume(session.exportState(), { ...quick, fetch: corrupt }).statusDetails(),
+    ).rejects.toMatchObject({ code: "chain_invalid" });
+  });
+
+  test("status details reject authenticated but invalid first hello", async () => {
+    const h = setup();
+    const { session } = await createSession({ serverUrl, apiKey, fetch: h.fetch, ...quick });
+    const state = session.exportState();
+    // Redeem before appending a correctly encrypted, malformed browser hello.
+    const redeemed = await h.fetch(
+      new Request(`${serverUrl}/v1/sessions/${state.sessionId}/redeem`, { method: "POST" }),
+    );
+    const { browser_token } = await redeemed.json();
+    await rawAppend(h.fetch, state.sessionId, browser_token, state.secret, {
+      v: 1,
+      kind: "hello",
+      id: "invalid-hello",
+      body: { mode: "invalid", scope: null },
+    });
+    await expect(session.statusDetails()).rejects.toMatchObject({ code: "protocol_invalid" });
+  });
+
+  test("cached authenticated status bypasses a blocked command poll", async () => {
+    const { session, fetch } = await pair();
+    let blockMessages = false;
+    let reached: (() => void) | undefined;
+    const blocked = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const resumed = AgentSession.resume(session.exportState(), {
+      ...quick,
+      fetch: (request) => {
+        if (blockMessages && new URL(request.url).pathname.endsWith("/messages")) {
+          reached?.();
+          return new Promise<Response>(() => {});
+        }
+        return fetch(request);
+      },
+    });
+    await resumed.waitReady();
+    blockMessages = true;
+    const pending = resumed
+      .send("browser_snapshot", {}, { timeoutMs: 150 })
+      .catch((error) => error);
+    await blocked;
+    expect(await resumed.statusDetails({ timeoutMs: 50 })).toMatchObject({
+      state: "active",
+      hello,
+    });
+    expect(await pending).toMatchObject({ code: "timeout" });
+  });
+
+  test("cached status rejects rollback and a conflicting same-sequence hash", async () => {
+    const { session, fetch } = await pair();
+    let rollback: "none" | "sequence" | "hash" = "none";
+    const resumed = AgentSession.resume(session.exportState(), {
+      ...quick,
+      fetch: async (request) => {
+        const response = await fetch(request);
+        if (rollback === "none" || !request.url.endsWith(session.sessionId)) return response;
+        const status = await response.json();
+        if (rollback === "sequence") {
+          status.last_seq = 0;
+          status.last_hash = "";
+        } else status.last_hash = "f".repeat(64);
+        return Response.json(status);
+      },
+    });
+    await resumed.waitReady();
+    rollback = "sequence";
+    await expect(resumed.statusDetails()).rejects.toMatchObject({ code: "chain_invalid" });
+    rollback = "hash";
+    await expect(resumed.statusDetails()).rejects.toMatchObject({ code: "chain_invalid" });
+  });
+
   test("create, private delivery, ready, result correlation, screenshot, handoff, stop and ledger", async () => {
     const { code, session, browser } = await pair();
     expect(parseCode(code)?.sessionId).toBe(session.sessionId);

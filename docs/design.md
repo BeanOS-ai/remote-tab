@@ -333,8 +333,10 @@ one-shot-redeem error (§4.4). No command is sent before a valid hello.
 
 The M2 stdio MCP adapter exposes §6 plus create/wait-ready, configured by
 `REMOTE_TAB_SERVER_URL` and `REMOTE_TAB_API_KEY`. It retains one current
-session in memory. Status currently includes transport metadata and cached
-authenticated hello mode/scope. The dead-drop status has no live
+session in memory. The shared client `statusDetails()` recovers verified hello
+metadata without waiting for a new hello; CLI and MCP status include
+transport metadata and authenticated hello mode/scope when available, even
+after stop. The dead-drop status has no live
 paused-by-human field; that state remains unknown until M3 adds authenticated
 browser-state reporting. It must not be inferred as false.
 

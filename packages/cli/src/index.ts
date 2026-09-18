@@ -252,7 +252,7 @@ export async function execute(
     case "wait-ready":
       return session.waitReady(options);
     case "remote_tab_status":
-      return session.status(options);
+      return session.statusDetails(options);
     case "remote_tab_stop":
       return session.stop();
     case "remote_tab_handoff":
