@@ -1,0 +1,11 @@
+{
+  "name": "@remote-tab/extension",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "build": "bun build.ts" },
+  "dependencies": {
+    "@remote-tab/client": "workspace:*",
+    "@remote-tab/protocol": "workspace:*"
+  }
+}
