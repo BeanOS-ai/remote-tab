@@ -302,9 +302,11 @@ pipeline.
   the agent sends to that session. This is **not detectable
   cryptographically**. Mitigations, not guarantees: the redeem window is
   ≤ 10 min; the real human sees "already redeemed" and tells the agent; the
-  agent stops the session; the session is bound to a tab the thief controls,
-  not to the human's, so the thief gains the agent's commands, never the
-  human's data. A stronger pairing step (for example, a confirmation the human
+  agent stops the session. What the thief gains is bounded but real: the
+  session is bound to a tab the thief controls, so they get no access to the
+  intended human's browser, but they do receive everything the agent sends
+  into that session, including any data the agent puts in commands (text it
+  types, URLs it opens). A stronger pairing step (for example, a confirmation the human
   reads from the extension and returns to the agent out of band) is possible
   and deliberately not in v1.
 - **Server or store compromised.** Attacker gets ciphertext, sequence numbers,
