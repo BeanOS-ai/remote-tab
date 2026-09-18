@@ -259,6 +259,26 @@ describe("privacy guard", () => {
     expect(JSON.stringify(output)).not.toContain("aBaB");
     expect(JSON.stringify(output)).toContain("Echo [redacted]");
   });
+  test.each(["1", "e"])(
+    "short protected value %s cannot corrupt snapshot keys, roles or usable refs",
+    async (value) => {
+      const f = fixture([{ attrs: { autocomplete: "cc-exp-month" }, value }]);
+      const output = await f.driver.execute("browser_snapshot");
+      const content = output.result as { text: string };
+      expect(Object.keys(content)).toEqual(["url", "title", "text", "truncated"]);
+      expect(content.text).toContain('- textbox "[redacted]" [ref=e1]');
+      expect(content.text).toContain("[ref=e2]");
+      const typed = await f.driver.execute("browser_type", { ref: "e1", text: "2" });
+      expect(typed.result).toEqual({ typed: true });
+      expect(typed.screenshot).toEqual(new TextEncoder().encode("masked pixels"));
+      await f.driver.onEvent("Runtime.consoleAPICalled", { type: "log", args: [{ value }] });
+      expect((await f.driver.execute("browser_console_messages")).result).toEqual({
+        entries: [{ level: "log", args: ["[redacted]"] }],
+        truncated: false,
+        dropped: 0,
+      });
+    },
+  );
   test("values first discovered during screenshot are scrubbed before serializing the result", async () => {
     const f = fixture([]);
     f.state.hook = async (method) => {
@@ -319,6 +339,54 @@ describe("privacy guard", () => {
     );
     expect(JSON.stringify(await f.driver.execute("browser_network_requests"))).not.toContain(
       "sword-fish",
+    );
+  });
+  test("handoff drops unknown transient OTP diagnostics while keeping request interception active", async () => {
+    const f = fixture([{ attrs: { autocomplete: "one-time-code" }, value: "" }]);
+    await f.driver.initialize();
+    await f.driver.onEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ value: "old log" }],
+    });
+    f.driver.setPaused(true);
+    f.state.snapshot = snapshot([{ attrs: { autocomplete: "one-time-code" }, value: "654321" }]);
+    await f.driver.onEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ value: "OTP 654321" }],
+    });
+    await f.driver.onEvent("Network.requestWillBeSent", {
+      requestId: "otp",
+      request: {
+        method: "GET",
+        url: "https://example.com/?otp=654321",
+        headers: { Echo: "654321" },
+      },
+    });
+    await f.driver.onEvent("Fetch.requestPaused", {
+      requestId: "request",
+      resourceType: "Document",
+      request: { url: "https://example.com" },
+    });
+    expect(f.calls.some((call) => call.method === "Fetch.continueRequest")).toBe(true);
+    await expect(f.driver.execute("browser_snapshot")).rejects.toMatchObject({ code: "paused" });
+    f.state.snapshot = snapshot([{ attrs: { autocomplete: "one-time-code" }, value: "" }]);
+    f.driver.setPaused(false);
+    expect((await f.driver.execute("browser_console_messages")).result).toEqual({
+      entries: [],
+      truncated: false,
+      dropped: 0,
+    });
+    expect((await f.driver.execute("browser_network_requests")).result).toEqual({
+      entries: [],
+      truncated: false,
+      dropped: 0,
+    });
+    await f.driver.onEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ value: "safe resumed log" }],
+    });
+    expect(JSON.stringify(await f.driver.execute("browser_console_messages"))).toContain(
+      "safe resumed log",
     );
   });
 });

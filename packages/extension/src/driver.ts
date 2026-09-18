@@ -133,6 +133,7 @@ export class TabDriver {
   private console: Record<string, unknown>[] = [];
   private networkDropped = 0;
   private consoleDropped = 0;
+  private paused = false;
   private scopeError: DriverError | undefined;
   private loadedDocuments = new Set<string>();
   private loadWaiters = new Map<string, () => void>();
@@ -145,6 +146,15 @@ export class TabDriver {
   ) {
     this.url = options.url;
     this.title = options.title;
+  }
+  /** Human input may fill and clear a secret between scans. Discard diagnostics
+   * across that boundary instead of retaining values the scanner never saw. */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+    this.network.clear();
+    this.console = [];
+    this.networkDropped = 0;
+    this.consoleDropped = 0;
   }
   private async send(
     method: string,
@@ -259,6 +269,8 @@ export class TabDriver {
       await this.send("Page.handleJavaScriptDialog", { accept: false });
       this.options.onNotice?.({ code: "dialog_dismissed", message: "A page dialog was dismissed" });
     }
+    // Lifecycle and request interception above must keep working during handoff.
+    if (this.paused) return;
     if (method.startsWith("Network.") && typeof params.requestId === "string") {
       const id = params.requestId;
       const entry = this.network.get(id) ?? { requestId: id };
@@ -420,7 +432,7 @@ export class TabDriver {
       if (objectId) await this.send("Runtime.releaseObject", { objectId });
     }
   }
-  private async snapshot(ref?: string): Promise<unknown> {
+  private async snapshot(ref?: string): Promise<() => unknown> {
     if (ref) await this.node(ref, "check");
     const response = await this.send("Accessibility.getFullAXTree");
     await this.options.privacy?.scan();
@@ -458,48 +470,51 @@ export class TabDriver {
     for (const node of nodes) if (!byId.has(str(node.parentId))) walk(node, 0);
     for (const node of nodes) walk(node, 0);
     const root = nodes.find((node) => rec(node.role).value === "RootWebArea");
-    if (root) this.title = this.safeText(rec(root.name).value, 2000);
-    const fresh = new Map<string, number>();
-    const out = {
-      url: this.safeText(this.url, 10000),
-      title: this.safeText(this.title, 2000),
-      text: "",
-      truncated: false,
-    };
-    let bytes = size(out);
-    for (const { node, depth } of ordered) {
-      if (node.ignored) continue;
-      const backend = node.backendDOMNodeId;
-      const role = str(rec(node.role).value, 100);
-      const name =
-        typeof backend === "number" && this.options.privacy?.isSensitive(backend)
-          ? "[redacted]"
-          : this.safeText(rec(node.name).value, 2000);
-      let refId: string | undefined;
-      if (typeof backend === "number") {
-        let id = this.stableRefs.get(backend);
-        if (!id) {
-          id = `e${++this.nextRef}`;
-          this.stableRefs.set(backend, id);
+    return () => {
+      if (root) this.title = this.safeText(rec(root.name).value, 2000);
+      const fresh = new Map<string, number>();
+      const out = {
+        url: this.safeText(this.url, 10000),
+        title: this.safeText(this.title, 2000),
+        text: "",
+        truncated: false,
+      };
+      let bytes = size(out);
+      for (const { node, depth } of ordered) {
+        if (node.ignored) continue;
+        const backend = node.backendDOMNodeId;
+        const role = str(rec(node.role).value, 100);
+        const name =
+          typeof backend === "number" && this.options.privacy?.isSensitive(backend)
+            ? "[redacted]"
+            : this.safeText(rec(node.name).value, 2000);
+        let refId: string | undefined;
+        if (typeof backend === "number") {
+          let id = this.stableRefs.get(backend);
+          if (!id) {
+            id = `e${++this.nextRef}`;
+            this.stableRefs.set(backend, id);
+          }
+          refId = id;
         }
-        refId = id;
+        // Values are deliberately omitted; the privacy layer can further sanitize names.
+        const line = `${"  ".repeat(depth)}- ${role} ${JSON.stringify(name)}${refId ? ` [ref=${refId}]` : ""}\n`;
+        const cost = size(line) - 2;
+        if (bytes + cost > MAX_SNAPSHOT) {
+          out.truncated = true;
+          break;
+        }
+        bytes += cost;
+        out.text += line;
+        if (typeof backend === "number" && refId) fresh.set(refId, backend);
       }
-      // Values are deliberately omitted; the privacy layer can further sanitize names.
-      const line = `${"  ".repeat(depth)}- ${role} ${JSON.stringify(name)}${refId ? ` [ref=${refId}]` : ""}\n`;
-      const cost = size(line) - 2;
-      if (bytes + cost > MAX_SNAPSHOT) {
-        out.truncated = true;
-        break;
-      }
-      bytes += cost;
-      out.text += line;
-      if (typeof backend === "number" && refId) fresh.set(refId, backend);
-    }
-    this.refs = fresh;
-    this.stableRefs = new Map([...fresh].map(([id, backend]) => [backend, id]));
-    return out;
+      this.refs = fresh;
+      this.stableRefs = new Map([...fresh].map(([id, backend]) => [backend, id]));
+      return out;
+    };
   }
   async screenshot(ref?: string): Promise<Uint8Array> {
+    if (this.paused) throw new DriverError("paused", "Paused: you took over");
     this.checkUrl(this.url);
     let clip: ScreenshotClip | undefined;
     if (ref) {
@@ -612,7 +627,35 @@ export class TabDriver {
     });
     await this.send("Input.dispatchKeyEvent", { type: "keyUp", ...data });
   }
+  private sanitizeOutput(tool: string, value: unknown): unknown {
+    const privacy = this.options.privacy;
+    if (!privacy) return value;
+    if (tool === "browser_evaluate") return privacy.sanitize(value);
+    if (tool !== "browser_console_messages" && tool !== "browser_network_requests") return value;
+    const output = rec(value);
+    return {
+      ...output,
+      entries: list(output.entries).map((entry) => {
+        const clean = { ...rec(entry) };
+        // These fields originate in the page. Keep extension-owned keys, counts,
+        // CDP ids, status codes and role/level vocabulary intact.
+        for (const key of [
+          "url",
+          "method",
+          "mimeType",
+          "error",
+          "args",
+          "text",
+          "requestHeaders",
+          "responseHeaders",
+        ])
+          if (key in clean) clean[key] = privacy.sanitize(clean[key]);
+        return clean;
+      }),
+    };
+  }
   async execute(tool: string, args: Record<string, unknown> = {}): Promise<DriverResult> {
+    if (this.paused) throw new DriverError("paused", "Paused: you took over");
     if (!READ.has(tool) && !ACT.has(tool))
       throw new DriverError("unknown_tool", "Unknown browser tool");
     if (
@@ -625,8 +668,9 @@ export class TabDriver {
     this.scopeError = undefined;
     await this.options.privacy?.scan();
     let result: unknown = { ok: true };
+    let renderSnapshot: (() => unknown) | undefined;
     if (tool === "browser_snapshot")
-      result = await this.snapshot(typeof args.ref === "string" ? args.ref : undefined);
+      renderSnapshot = await this.snapshot(typeof args.ref === "string" ? args.ref : undefined);
     else if (tool === "browser_take_screenshot")
       return {
         result: { captured: true },
@@ -734,12 +778,12 @@ export class TabDriver {
     if (isActing(tool)) await this.waitForNavigation();
     if (this.scopeError) throw this.scopeError;
     await this.options.privacy?.scan();
-    if (this.options.privacy) result = this.options.privacy.sanitize(result);
+    result = renderSnapshot ? renderSnapshot() : this.sanitizeOutput(tool, result);
     result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
     const screenshot = isActing(tool) ? await this.screenshot() : undefined;
     // Screenshot scans can discover newly filled fields. Scrub once more before
     // constructing any transport payload, with all discovered values available.
-    if (this.options.privacy) result = this.options.privacy.sanitize(result);
+    if (screenshot) result = this.sanitizeOutput(tool, result);
     const bytes = encoder.encode(JSON.stringify(result));
     const output: DriverResult =
       bytes.length > MAX_LOG

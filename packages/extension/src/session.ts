@@ -22,6 +22,8 @@ export class SharedSession {
   state: ShareState;
   private readonly abort = new AbortController();
   private loop?: Promise<void>;
+  private commandPoll?: AbortController;
+  private handoffDelivery?: Promise<void>;
   private stopping?: Promise<void>;
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private takeoverEpoch = 0;
@@ -68,6 +70,7 @@ export class SharedSession {
       share.state.expiresAt = (await peer.status()).expires_at;
       if (options.isCancelled?.()) throw new Error("Sharing cancelled");
       share.state.paused = options.isPaused?.() ?? false;
+      share.driver.setPaused(share.state.paused);
       share.armExpiry();
       share.loop = share.run();
       return share;
@@ -90,17 +93,29 @@ export class SharedSession {
   private async run() {
     try {
       while (!this.abort.signal.aborted) {
+        // A human Done interrupts the idle read, then gets the peer write lock.
+        await this.handoffDelivery;
+        if (this.abort.signal.aborted) break;
+        const poll = new AbortController();
+        this.commandPoll = poll;
         let command: Awaited<ReturnType<BrowserPeer["nextCommand"]>>;
         try {
-          command = await this.peer.nextCommand({ signal: this.abort.signal, timeoutMs: 30_000 });
+          command = await this.peer.nextCommand({
+            signal: AbortSignal.any([this.abort.signal, poll.signal]),
+            timeoutMs: 30_000,
+          });
         } catch (error) {
+          if (poll.signal.aborted && !this.abort.signal.aborted) continue;
           if (error instanceof RemoteTabError && error.code === "timeout") continue;
           throw error;
+        } finally {
+          if (this.commandPoll === poll) this.commandPoll = undefined;
         }
         if (this.abort.signal.aborted) break;
         if (command.kind === "handoff") {
           this.state.handoff = { id: command.id, message: command.message };
           this.state.paused = true;
+          this.driver.setPaused(true);
           this.log("Your agent needs you. Click Done when finished.");
           continue;
         }
@@ -194,6 +209,7 @@ export class SharedSession {
   pause() {
     if (!this.state.sharing) return;
     this.takeoverEpoch++;
+    this.driver.setPaused(true);
     if (this.state.paused) return;
     this.state.paused = true;
     this.state.notice = "Paused: you took over";
@@ -203,16 +219,31 @@ export class SharedSession {
     if (!this.state.sharing) throw new Error("Sharing has ended");
     if (this.state.handoff) throw new Error("Click Done to finish your agent’s handoff");
     this.state.paused = false;
+    this.driver.setPaused(false);
     this.state.notice = undefined;
     this.log("Resumed sharing");
   }
   async done() {
     const handoff = this.state.handoff;
     if (!this.state.sharing || !handoff) throw new Error("No handoff is waiting");
-    await this.peer.handoffDone(handoff.id);
+    if (this.handoffDelivery) return this.handoffDelivery;
+    const epoch = this.takeoverEpoch;
+    this.commandPoll?.abort();
+    const delivery = this.peer.handoffDone(handoff.id);
+    this.handoffDelivery = delivery;
+    try {
+      await delivery;
+    } finally {
+      if (this.handoffDelivery === delivery) this.handoffDelivery = undefined;
+    }
     if (!this.state.sharing) return;
     this.state.handoff = undefined;
+    if (epoch !== this.takeoverEpoch) {
+      this.state.notice = "Paused: you took over";
+      return;
+    }
     this.state.paused = false;
+    this.driver.setPaused(false);
     this.state.notice = undefined;
     this.log("Handoff complete; agent resumed");
   }

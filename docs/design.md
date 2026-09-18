@@ -310,6 +310,12 @@ Behaviour:
   by the current automation call are excluded. An interrupted command returns
   `paused` even if Resume is clicked before it finishes, without uploading its
   result or screenshot. A handoff must be completed with Done, not Resume.
+  Diagnostic buffers are cleared on pause and events are not collected while
+  paused, so human-entered credentials cannot remain in delayed console/network
+  results after a field clears itself. Automation input uses a unique timestamp
+  one second ahead to distinguish delayed CDP event delivery; only an exact
+  match received before that timestamp is excluded. Page handlers therefore see
+  adjusted timestamps for automated input; late events pause safely.
 - **Redaction, kept simple.** Values of inputs whose type is `password`, or
   whose `autocomplete` is `one-time-code` or `cc-*`, are never included in
   snapshots or results, and those elements are masked in screenshots. No
