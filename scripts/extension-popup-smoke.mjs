@@ -48,6 +48,8 @@ try {
       activeTab: { id: 17, url: "https://example.test/form", title: "Consented tab" },
     };
     document.addEventListener("invalid", () => globalThis.popupTest.invalidEvents++, true);
+    // Headless shell does not supply the chrome namespace on ordinary pages.
+    globalThis.chrome ??= {};
     Object.assign(globalThis.chrome, {
       tabs: {
         query: async () => [globalThis.popupTest.activeTab],
@@ -90,9 +92,13 @@ try {
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
   const failures = [];
-  page.on("pageerror", (error) => failures.push(error.message));
+  page.on("pageerror", (error) => {
+    failures.push(error.message);
+    console.error("Popup page error:", error.message);
+  });
   await page.goto("https://popup.test/popup.html");
   await page.waitForFunction(() => globalThis.popupTest.polls >= 2);
+  console.log("Popup fixture loaded and state polling verified");
   assert.equal(
     await page.locator("body").evaluate((body) => body.getBoundingClientRect().width),
     372,

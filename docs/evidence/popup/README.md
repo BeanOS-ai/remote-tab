@@ -1,3 +1,9 @@
+---
+created: 2026-09-19
+last_updated: 2026-09-19
+last_reviewed: 2026-09-19
+---
+
 # Remote Tab popup evidence
 
 Captured September 19, 2026 with `scripts/extension-popup-smoke.mjs` for issues

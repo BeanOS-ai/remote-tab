@@ -68,12 +68,15 @@ export class HandoffAttention {
         if (result.exceptionDetails || !this.objectId) throw new Error("Could not display handoff");
         if (epoch !== this.epoch) return;
         this.refresh = setInterval(() => {
-          if (epoch === this.epoch) void this.call("refresh").catch(() => this.clear());
+          if (epoch === this.epoch)
+            void this.call("refresh").catch(() => {
+              if (epoch === this.epoch) return this.clear();
+            });
         }, 1000);
       })
       .catch(() => {
         // Badge and notification remain available if the document is unsupported.
-        this.wanted = undefined;
+        if (epoch === this.epoch) this.wanted = undefined;
       });
   }
   async onEvent(method: string, params: Record<string, unknown>) {

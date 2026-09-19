@@ -205,6 +205,9 @@ export class TabDriver {
     this.checkUrl(this.url);
     await this.scanPrivacy();
   }
+  isMainFrame(frameId: unknown): boolean {
+    return frameId === this.frameId;
+  }
   private clearDocument(): void {
     this.contextId = undefined;
     this.refs.clear();

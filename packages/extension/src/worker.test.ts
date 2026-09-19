@@ -599,7 +599,7 @@ test("other-tab popup identifies and focuses the shared tab across windows; clos
   expect(await h.message({ action: "stop" })).toEqual({ ok: true });
 });
 
-for (const action of ["done", "pause", "navigation", "stop"] as const) {
+for (const action of ["done", "pause", "navigation", "same-document", "stop"] as const) {
   test(`pending handoff attention clears on ${action} and notification focuses only shared tab`, async () => {
     const h = await setup();
     expect(await h.share()).toEqual({ ok: true });
@@ -607,12 +607,23 @@ for (const action of ["done", "pause", "navigation", "stop"] as const) {
     const handoff = h.session.handoff("Review the form").catch(() => {});
     await until(() => h.badge() === "!");
     expect(h.notification()).toBe(true);
+    h.event("Page.navigatedWithinDocument", {
+      frameId: "ad-iframe",
+      url: "https://example.test/ad#rotated",
+    });
+    await Bun.sleep(5);
+    expect(h.badge()).toBe("!");
     h.clickNotification();
     await until(() => h.focusedWindows.length === 1);
     expect(h.focusedTabs).toEqual([17]);
     expect(h.focusedWindows).toEqual([9]);
     if (action === "navigation")
       h.event("Page.frameNavigated", { frame: { id: "main", url: "https://example.test/next" } });
+    else if (action === "same-document")
+      h.event("Page.navigatedWithinDocument", {
+        frameId: "main",
+        url: "https://example.test/form#next",
+      });
     else await h.message({ action });
     await until(() => h.badge() === "" && !h.notification());
     if (action !== "stop") await h.message({ action: "stop" });

@@ -267,7 +267,7 @@ chrome.debugger.onEvent.addListener((target, method, params) => {
     // capability or attention message onto a new page, including same-document navigation.
     if (
       (method === "Page.frameNavigated" && record(params?.frame) && !params.frame.parentId) ||
-      method === "Page.navigatedWithinDocument"
+      (method === "Page.navigatedWithinDocument" && driver?.isMainFrame(params?.frameId))
     )
       void attention?.clear();
     void attention?.onEvent(method, params ?? {}).catch(failed);

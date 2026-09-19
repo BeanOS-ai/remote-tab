@@ -23,9 +23,16 @@ function gate() {
 }
 
 /** Only Chrome commands are doubled; consent, control loop and encrypted transport are real. */
-async function fixture() {
+async function fixture(
+  onHandoff?: (
+    handoff: { id: string; message: string } | undefined,
+    expiresAt: string,
+  ) => void | Promise<void>,
+) {
+  let now = Date.now();
   const app = createApp({
-    store: new MemoryStore(),
+    store: new MemoryStore(() => new Date(now)),
+    now: () => new Date(now),
     keyResolver: new StaticKeyResolver(new Map([["controls", "test-key"]]), { defaultQps: 0 }),
     anonymousQps: 0,
   });
@@ -87,6 +94,7 @@ async function fixture() {
   };
   const share = await SharedSession.connect({
     ...quick,
+    onHandoff,
     code: created.code,
     serverUrl,
     hello,
@@ -99,6 +107,9 @@ async function fixture() {
   await created.session.waitReady();
   return {
     agent: created.session,
+    expire: () => {
+      now += 61 * 60_000;
+    },
     share,
     calls,
     barriers,
@@ -323,6 +334,60 @@ test("recent action summaries describe the operation without echoing typed conte
       h.share.state.actions.every((summary) => typeof summary === "string" && summary.length > 0),
     ).toBe(true);
   } finally {
+    await h.close();
+  }
+});
+
+test("expiry clears pending handoff state and notifies the attention owner", async () => {
+  const attention: (string | undefined)[] = [];
+  const h = await fixture((handoff) => {
+    attention.push(handoff?.id);
+  });
+  try {
+    const pending = h.agent.handoff("Complete before expiry").catch(() => {});
+    await until(() => h.share.state.handoff !== undefined);
+    expect(attention[0]).toBe(h.share.state.handoff?.id);
+    h.expire();
+    await until(() => !h.share.state.sharing);
+    expect(h.share.state.handoff).toBeUndefined();
+    expect(attention.at(-1)).toBeUndefined();
+    await pending;
+    await h.share.settled();
+    expect(h.detached()).toBe(1);
+  } finally {
+    await h.close();
+  }
+});
+
+test("Done does not resume commands until asynchronous handoff UI cleanup finishes", async () => {
+  const cleanup = gate();
+  let clearing = false;
+  const h = await fixture(async (handoff) => {
+    if (!handoff) {
+      clearing = true;
+      await cleanup.promise;
+    }
+  });
+  try {
+    const pending = h.agent.handoff("Review and return control");
+    await until(() => h.share.state.handoff !== undefined);
+    const done = h.share.done();
+    await until(() => clearing);
+    await pending;
+    let snapshotFinished = false;
+    const snapshot = h.agent.send("browser_snapshot").then((result) => {
+      snapshotFinished = true;
+      return result;
+    });
+    const before = h.calls.length;
+    await Bun.sleep(25);
+    expect(snapshotFinished).toBe(false);
+    expect(h.calls.length).toBe(before);
+    cleanup.release();
+    await done;
+    expect((await snapshot).ok).toBe(true);
+  } finally {
+    cleanup.release();
     await h.close();
   }
 });

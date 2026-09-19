@@ -13,6 +13,7 @@ function fixture() {
   const calls: { method: string; params: Record<string, unknown> }[] = [];
   const done: string[] = [];
   let failDone = false;
+  let cdpHook: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | undefined;
   Object.assign(globalThis, {
     chrome: {
       runtime: { getURL: (path: string) => `chrome-extension://test/${path}` },
@@ -38,6 +39,8 @@ function fixture() {
   const attention = new HandoffAttention(
     async (method, params = {}) => {
       calls.push({ method, params });
+      const override = await cdpHook?.(method, params);
+      if (override !== undefined) return override;
       if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "shared" } } };
       if (method === "Page.createIsolatedWorld") return { executionContextId: 71 };
       if (method === "Runtime.evaluate") return { result: { objectId: "ui" } };
@@ -75,9 +78,74 @@ function fixture() {
     fail: (value: boolean) => {
       failDone = value;
     },
+    hook: (value: typeof cdpHook) => {
+      cdpHook = value;
+    },
   };
 }
 const expiry = () => new Date(Date.now() + 60000).toISOString();
+async function until(predicate: () => boolean) {
+  for (let i = 0; i < 2000 && !predicate(); i++) await Bun.sleep(1);
+  expect(predicate()).toBe(true);
+}
+
+test("a rejected refresh from an old handoff cannot revoke the new handoff", async () => {
+  const h = fixture();
+  let rejectOld: ((error: Error) => void) | undefined;
+  h.hook(async (method, params) => {
+    if (
+      method === "Runtime.callFunctionOn" &&
+      String(params.functionDeclaration).includes("refresh")
+    )
+      return new Promise((_, reject) => {
+        rejectOld = reject;
+      });
+    return undefined;
+  });
+  try {
+    h.attention.show("old", "Old request", expiry());
+    await until(() => rejectOld !== undefined);
+    await h.attention.clear();
+    h.hook(undefined);
+    h.calls.length = 0;
+    h.attention.show("new", "New request", expiry());
+    await h.ready();
+    rejectOld?.(new Error("Old context destroyed"));
+    await Bun.sleep(10);
+    expect(h.badge()).toBe("!");
+    expect(h.notifications()).toBe(1);
+    await h.attention.onEvent("Runtime.bindingCalled", h.binding());
+    expect(h.done).toEqual(["new"]);
+  } finally {
+    await h.attention.clear();
+  }
+});
+
+test("a rejected installation from an old handoff preserves the queued handoff capability", async () => {
+  const h = fixture();
+  let rejectOld: ((error: Error) => void) | undefined;
+  h.hook(async (method) => {
+    if (method === "Page.getFrameTree")
+      return new Promise((_, reject) => {
+        rejectOld = reject;
+      });
+    return undefined;
+  });
+  try {
+    h.attention.show("old", "Old request", expiry());
+    await until(() => rejectOld !== undefined);
+    h.attention.show("new", "New request", expiry());
+    h.hook(undefined);
+    rejectOld?.(new Error("Old document replaced"));
+    await h.ready();
+    expect(h.badge()).toBe("!");
+    expect(h.notifications()).toBe(1);
+    await h.attention.onEvent("Runtime.bindingCalled", h.binding());
+    expect(h.done).toEqual(["new"]);
+  } finally {
+    await h.attention.clear();
+  }
+});
 
 test("only the isolated context and current capability can complete a handoff", async () => {
   const h = fixture();
