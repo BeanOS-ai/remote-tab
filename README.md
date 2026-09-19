@@ -45,7 +45,26 @@ of the server (domains, cloud projects, secrets) lives outside this repo.
 
 ## Server and agent bootstrap
 
-Run `bun install`, then `bun run build`; deploy `dist/main.js` with Bun.
+Use **Bun 1.4.2**, the pinned CI and container build baseline. The committed v2
+lockfile is incompatible with Bun 1.3.13 frozen installs; do not rewrite it or
+disable `--frozen-lockfile` to accommodate an older build image. Newer versions
+require validation before updating the build pin.
+
+Run `bun install --frozen-lockfile`, then `bun run build`; deploy `dist/main.js` with Bun.
+The generic server image uses the same Bun version, pinned by tag and immutable
+multi-platform digest:
+
+```sh
+docker build -f packages/server/Dockerfile -t remote-tab .
+docker run --rm -p 8080:8080 remote-tab
+```
+
+The image defaults to the in-memory store, runs as an unprivileged user, and
+includes the optional GCP adapter's production dependencies. Its build prints
+`bun --version`; CI builds this Dockerfile and checks runtime packaging without
+cloud access. Distribution-owned Dockerfiles and base-image overrides must
+select the same compatible Bun baseline; an upstream pin cannot override them.
+
 The API is key-optional: anonymous calls default to 10 requests/second/IP.
 Present a platform key with `Authorization: Bearer <key>` on creation or
 bootstrap requests for the operator's resolved QPS. Session requests keep
