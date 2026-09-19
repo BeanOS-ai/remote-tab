@@ -5,6 +5,8 @@ import type { Role, SessionState } from "@remote-tab/protocol";
 export interface SessionRecord {
   id: string;
   platform: string;
+  /** Public key fingerprint and immutable creator identity; never the raw platform key. */
+  keyBinding?: { keyHash: string; subject: string };
   state: SessionState;
   createdAt: string;
   expiresAt: string;
