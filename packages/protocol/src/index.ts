@@ -38,35 +38,30 @@ export interface Envelope {
 
 /** Lowercase RFC 4122 v4 UUID: 8-4-4-4-12 hex groups, version nibble 4, variant 8..b. */
 export const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-/** First 16 bytes of the domain-separated session-id SHA-256 digest. */
-export const SESSION_ID_RE = /^[0-9a-f]{32}$/;
-/** 16 random bytes, canonical base64url without padding (unused final bits are zero). */
-export const SECRET_RE = /^[A-Za-z0-9_-]{21}[AQgw]$/;
+/** 32 random bytes, base64url without padding. */
+export const SECRET_RE = /^[A-Za-z0-9_-]{43}$/;
 
 /**
- * Parse the human-pasted code `rt1.<secret>`. Returns null on any
+ * Parse the human-pasted code `rt1.<session-id>.<secret>`. Returns null on any
  * malformation so callers can reject before attempting a redeem. There is
  * deliberately no link form: a link would hand the secret to a web page, and
  * only installed clients may hold it (design §5.5).
  */
-export function parseCode(code: string): { secret: string } | null {
-  if (typeof code !== "string") return null;
+export function parseCode(code: string): { sessionId: string; secret: string } | null {
   const parts = code.trim().split(".");
-  if (parts.length !== 2 || parts[0] !== CODE_PREFIX) return null;
-  const [, secret] = parts;
+  if (parts.length !== 3 || parts[0] !== CODE_PREFIX) return null;
+  const [, sessionId, secret] = parts;
+  if (!UUID_V4_RE.test(sessionId)) return null;
   if (!SECRET_RE.test(secret)) return null;
-  return { secret };
+  return { sessionId, secret };
 }
 
-export function formatCode(secret: string): string {
-  if (typeof secret !== "string" || !SECRET_RE.test(secret))
-    throw new Error("Invalid session secret");
-  return `${CODE_PREFIX}.${secret}`;
+export function formatCode(sessionId: string, secret: string): string {
+  return `${CODE_PREFIX}.${sessionId}.${secret}`;
 }
 
 /** Wire shapes of the dead-drop API (design §5.3). */
 export interface CreateSessionRequest {
-  id: string;
   ttl_seconds?: number;
 }
 export interface CreateSessionResponse {
@@ -110,7 +105,6 @@ export type ErrorCode =
   | "unauthorized"
   | "not_found"
   | "already_redeemed"
-  | "id_taken"
   | "redeem_window_closed"
   | "session_not_active"
   | "chain_mismatch"

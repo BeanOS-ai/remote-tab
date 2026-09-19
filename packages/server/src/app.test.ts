@@ -31,10 +31,7 @@ function harness(nowMs?: () => number) {
 async function createSession(call: ReturnType<typeof harness>["call"], ttl?: number) {
   const res = await call(
     "/v1/sessions",
-    {
-      method: "POST",
-      body: JSON.stringify({ id: crypto.randomUUID().replaceAll("-", ""), ttl_seconds: ttl }),
-    },
+    { method: "POST", body: ttl ? JSON.stringify({ ttl_seconds: ttl }) : "" },
     API_KEY,
   );
   expect(res.status).toBe(201);
@@ -66,42 +63,6 @@ describe("server serves nothing but the API", () => {
 });
 
 describe("create + redeem", () => {
-  test("creation requires an explicit canonical session ID and never generates a replacement", async () => {
-    for (const body of [
-      undefined,
-      {},
-      { id: null },
-      { id: 42 },
-      { id: "a".repeat(31) },
-      { id: "a".repeat(33) },
-      { id: "A".repeat(32) },
-      { id: "g".repeat(32) },
-      { id: crypto.randomUUID() },
-      { id: "../state" },
-    ]) {
-      const { call } = harness();
-      const response = await call(
-        "/v1/sessions",
-        { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) },
-        API_KEY,
-      );
-      expect(response.status).toBe(400);
-      expect((await response.json()).error).toBe("invalid");
-    }
-    const { call } = harness();
-    const id = "0123456789abcdef".repeat(2);
-    const response = await call(
-      "/v1/sessions",
-      { method: "POST", body: JSON.stringify({ id }) },
-      API_KEY,
-    );
-    expect(response.status).toBe(201);
-    const session = await response.json();
-    expect(session.id).toBe(id);
-    expect((await call(`/v1/sessions/${id}`, {}, session.agent_token)).status).toBe(200);
-    expect((await redeem(call, id)).status).toBe(200);
-  });
-
   test("requires a platform key", async () => {
     const { call } = harness();
     expect((await call("/v1/sessions", { method: "POST" })).status).toBe(401);
@@ -116,10 +77,7 @@ describe("create + redeem", () => {
     );
     const over = await call(
       "/v1/sessions",
-      {
-        method: "POST",
-        body: JSON.stringify({ id: "a".repeat(32), ttl_seconds: LIMITS.ttlMaxSeconds + 1 }),
-      },
+      { method: "POST", body: JSON.stringify({ ttl_seconds: LIMITS.ttlMaxSeconds + 1 }) },
       API_KEY,
     );
     expect(over.status).toBe(400);
@@ -149,9 +107,7 @@ describe("create + redeem", () => {
 
   test("unknown session id shapes are 404, not 400 (no oracle)", async () => {
     const { call } = harness();
-    expect((await call("/v1/sessions/not-a-session-id/redeem", { method: "POST" })).status).toBe(
-      404,
-    );
+    expect((await call("/v1/sessions/not-a-uuid/redeem", { method: "POST" })).status).toBe(404);
     expect(
       (await call("/v1/sessions/6b1f2c3a-9d4e-4f5a-8b6c-7d8e9f0a1b2c/redeem", { method: "POST" }))
         .status,

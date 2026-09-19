@@ -6,7 +6,7 @@ import { GifEncoder, quantize } from "../packages/extension/src/gif.ts";
 
 const width = 32;
 const height = 16;
-const sessionId = "981c45d317a64eee93cbbbb1573f9114";
+const sessionId = "981c45d3-17a6-4eee-93cb-bbb1573f9114";
 const colors = [
   [255, 0, 0],
   [0, 255, 0],

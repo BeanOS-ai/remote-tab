@@ -102,7 +102,7 @@ try {
   assert.equal(await page.evaluate(() => globalThis.popupTest.requests.length), 0);
   console.log("Popup malformed-code polling verified");
 
-  await page.locator("#code").fill(formatCode(randomSecret()));
+  await page.locator("#code").fill(formatCode(crypto.randomUUID(), randomSecret()));
   await page.locator("#share").click();
   await page.waitForFunction(() => globalThis.popupTest.state.starting === true);
   console.log("Popup starting state reached");

@@ -1,12 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import type { BlobReference, Ledger } from "@remote-tab/client";
-import {
-  b64url,
-  chainHash,
-  deriveSessionId,
-  randomSecret,
-  unb64url,
-} from "@remote-tab/protocol/src/crypto";
+import { b64url, chainHash, unb64url } from "@remote-tab/protocol/src/crypto";
 import { LEDGER_CHUNK_BYTES, LedgerJobs, type LedgerRpc, loadLedger } from "./ledger-data";
 
 const ids: [LedgerJobs, string][] = [];
@@ -51,7 +45,7 @@ function transport(jobs: LedgerJobs, releases: string[] = []): LedgerRpc {
   };
 }
 async function fixture(size = 12, text = "Safe result"): Promise<Ledger> {
-  const sessionId = await deriveSessionId(randomSecret());
+  const sessionId = crypto.randomUUID();
   const reference: BlobReference = {
     blob_id: "b".repeat(32),
     nonce: "n".repeat(16),
@@ -242,7 +236,7 @@ for (const corruption of [
         ...ledger.entries[0].attachments[0].reference,
         blob_id: "x".repeat(32),
       };
-    if (corruption === "session") ledger.status.id = await deriveSessionId(randomSecret());
+    if (corruption === "session") ledger.status.id = crypto.randomUUID();
     const jobs = new LedgerJobs();
     const id = create(jobs, ledger);
     const releases: string[] = [];
@@ -261,7 +255,7 @@ test("job enforces immutable session binding even if the supplied peer is mutate
   const peer = { sessionId: ledger.sessionId, ledger: async () => ledger };
   const id = jobs.create(peer, after);
   ids.push([jobs, id]);
-  peer.sessionId = await deriveSessionId(randomSecret());
+  peer.sessionId = crypto.randomUUID();
   ledger.sessionId = peer.sessionId;
   ledger.status.id = peer.sessionId;
   resume();
@@ -341,7 +335,7 @@ test("timeouts are bounded, status cannot change session, and a lost release ack
       async (message) => {
         if (first) {
           first = false;
-          return { state: "loading", sessionId: await deriveSessionId(randomSecret()) };
+          return { state: "loading", sessionId: crypto.randomUUID() };
         }
         return rpc(message);
       },

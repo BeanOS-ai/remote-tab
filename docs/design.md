@@ -66,6 +66,11 @@ Non-goals (v1), explicitly deferred:
 
 ## 4. Session lifecycle
 
+Design amendment approved by the operator on 2026-09-18: the next protocol
+revision uses the short code and derived id below. Implementation follows in
+a separate PR before distribution; the previous three-part format has not
+shipped. The installed extension version will advance to 2.0.1 with that change.
+
 1. **Create.** The agent client generates a random 16-byte (128-bit) secret
    locally and derives the session id: the first 32 lowercase hex characters
    of `SHA-256(UTF8("remote-tab/v1/session-id") || raw_secret_bytes)`. It sends
@@ -303,7 +308,7 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.0.1); the store name stays **Bean Tab Share** until the M5 naming decision.
+(2.0.0); the store name stays **Bean Tab Share** until the M5 naming decision.
 Packaging does not upload or publish the extension.
 
 Popup: paste field, mode (read-only / act / full; full is labelled as

@@ -26,7 +26,7 @@
     },
     "packages/extension": {
       "name": "@remote-tab/extension",
-      "version": "2.0.1",
+      "version": "2.0.0",
       "dependencies": {
         "@remote-tab/client": "workspace:*",
         "@remote-tab/protocol": "workspace:*",

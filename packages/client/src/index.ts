@@ -1,13 +1,11 @@
 import {
   type CreateSessionResponse,
   type RedeemResponse,
-  SECRET_RE,
-  SESSION_ID_RE,
   type SessionStatus,
   formatCode,
   parseCode,
 } from "@remote-tab/protocol";
-import { deriveSessionId, randomSecret } from "@remote-tab/protocol/src/crypto";
+import { randomSecret } from "@remote-tab/protocol/src/crypto";
 import { Peer, baseUrl, jsonPost, object, request } from "./peer";
 import {
   type AgentConnectionState,
@@ -33,31 +31,28 @@ function validHello(body: unknown): body is Hello {
   );
 }
 
-/** Creates local key material; the server receives its public derived id, TTL, and authorization. */
+/** Creates locally held key material. The server receives only TTL and platform authorization. */
 export async function createSession(
   options: CreateOptions,
 ): Promise<{ code: string; session: AgentSession }> {
   const serverUrl = baseUrl(options.serverUrl);
   const secret = randomSecret();
-  const sessionId = await deriveSessionId(secret);
   const response = await request(
     options.fetch ?? ((req) => fetch(req)),
     `${serverUrl}/v1/sessions`,
     options.apiKey,
-    jsonPost({ id: sessionId, ttl_seconds: options.ttl }),
+    jsonPost({ ttl_seconds: options.ttl }),
     options.requestTimeoutMs,
   );
   const created = (await response.json()) as CreateSessionResponse;
-  if (!created || created.id !== sessionId)
-    throw new RemoteTabError("protocol_invalid", "Server returned a different session id");
   const state: AgentConnectionState = {
     v: 1,
     serverUrl,
-    sessionId,
+    sessionId: created.id,
     secret,
     agentToken: created.agent_token,
   };
-  return { code: formatCode(secret), session: AgentSession.resume(state, options) };
+  return { code: formatCode(created.id, secret), session: AgentSession.resume(state, options) };
 }
 
 export class AgentSession extends Peer {
@@ -66,38 +61,20 @@ export class AgentSession extends Peer {
     private readonly connection: AgentConnectionState,
     options: ClientOptions,
   ) {
-    let identity: Promise<string> | undefined;
-    const fetcher = options.fetch ?? ((request: Request) => fetch(request));
     super(
       connection.serverUrl,
       connection.sessionId,
       connection.agentToken,
       connection.secret,
       "agent",
-      {
-        ...options,
-        fetch: async (request) => {
-          identity ??= deriveSessionId(connection.secret);
-          if ((await identity) !== connection.sessionId)
-            throw new RemoteTabError(
-              "invalid",
-              "Private connection state has inconsistent session identity",
-            );
-          return fetcher(request);
-        },
-      },
+      options,
     );
   }
   /** Restores credentials only; readiness and chain are reverified from genesis. */
   static resume(state: AgentConnectionState, options: ClientOptions = {}): AgentSession {
     if (
-      !object(state) ||
       state.v !== 1 ||
-      typeof state.sessionId !== "string" ||
-      !SESSION_ID_RE.test(state.sessionId) ||
-      typeof state.secret !== "string" ||
-      !SECRET_RE.test(state.secret) ||
-      typeof state.serverUrl !== "string" ||
+      !parseCode(formatCode(state.sessionId, state.secret)) ||
       typeof state.agentToken !== "string" ||
       !state.agentToken
     )
@@ -300,10 +277,9 @@ export class BrowserPeer extends Peer {
     if (!parsed || !validHello(options.hello))
       throw new RemoteTabError("invalid", "Invalid code or hello");
     const serverUrl = baseUrl(options.serverUrl);
-    const sessionId = await deriveSessionId(parsed.secret);
     const response = await request(
       options.fetch ?? ((req) => fetch(req)),
-      `${serverUrl}/v1/sessions/${sessionId}/redeem`,
+      `${serverUrl}/v1/sessions/${parsed.sessionId}/redeem`,
       undefined,
       { method: "POST" },
       options.requestTimeoutMs,
@@ -311,7 +287,7 @@ export class BrowserPeer extends Peer {
     const redeemed = (await response.json()) as RedeemResponse;
     const peer = new BrowserPeer(
       serverUrl,
-      sessionId,
+      parsed.sessionId,
       redeemed.browser_token,
       parsed.secret,
       "browser",

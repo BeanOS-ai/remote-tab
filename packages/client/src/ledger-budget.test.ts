@@ -3,7 +3,6 @@ import type { Envelope, WireMessage } from "@remote-tab/protocol";
 import {
   b64url,
   chainHash,
-  deriveSessionId,
   deriveSessionKey,
   messageAad,
   randomSecret,
@@ -18,8 +17,8 @@ const metadataBytes = (ledger: Ledger) =>
   jsonBytes(ledger.status) +
   ledger.entries.reduce((n, entry) => n + jsonBytes({ ...entry, attachments: [] }), 0);
 async function fixture(repetitions = 4) {
+  const sessionId = crypto.randomUUID();
   const secret = randomSecret();
-  const sessionId = await deriveSessionId(secret);
   const key = await deriveSessionKey(secret, sessionId);
   const messages: WireMessage[] = [];
   async function append(envelope: Envelope) {

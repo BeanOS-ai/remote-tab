@@ -12,7 +12,7 @@ const hello = {
   scope: "example.test",
   url: "https://example.test/form",
   title: "Extension form",
-  extension_version: "2.0.1",
+  extension_version: "2.0.0",
 } satisfies Hello;
 
 /** Only Chrome is doubled: real driver, session loop, crypto, client and server run. */

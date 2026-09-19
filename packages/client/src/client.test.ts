@@ -1,12 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type Envelope, LIMITS, parseCode } from "@remote-tab/protocol";
-import {
-  deriveSessionId,
-  deriveSessionKey,
-  messageAad,
-  randomSecret,
-  seal,
-} from "@remote-tab/protocol/src/crypto";
+import { deriveSessionKey, messageAad, randomSecret, seal } from "@remote-tab/protocol/src/crypto";
 import { createApp } from "../../server/src/app";
 import { MemoryStore } from "../../server/src/memory-store";
 import {
@@ -191,7 +185,7 @@ describe("client lifecycle", () => {
 
   test("create, private delivery, ready, result correlation, screenshot, handoff, stop and ledger", async () => {
     const { code, session, browser } = await pair();
-    expect(await deriveSessionId(parseCode(code)?.secret ?? "")).toBe(session.sessionId);
+    expect(parseCode(code)?.sessionId).toBe(session.sessionId);
     expect(await session.waitReady()).toEqual(hello);
     const pending = session.send("browser_click", { ref: "e1" });
     const command = await browser.nextCommand();
@@ -270,22 +264,11 @@ describe("client lifecycle", () => {
   test("redeemer with wrong secret causes hijack_suspected and terminal stop", async () => {
     const h = setup();
     const { code, session } = await createSession({ serverUrl, apiKey, fetch: h.fetch, ...quick });
-    // The public id still permits an id-only attacker to redeem, but they cannot
-    // authenticate hello without the secret. The short-code client derives its
-    // own id, so model this attacker through the raw unauthenticated endpoint.
-    const response = await h.fetch(
-      new Request(`${serverUrl}/v1/sessions/${session.sessionId}/redeem`, { method: "POST" }),
-    );
-    const redeemed = await response.json();
-    await rawAppend(h.fetch, session.sessionId, redeemed.browser_token, randomSecret(), {
-      v: 1,
-      kind: "hello",
-      id: "forged",
-      body: hello,
-    });
+    const stolenIdCode = `rt1.${session.sessionId}.${randomSecret()}`;
+    await BrowserPeer.redeem({ serverUrl, code: stolenIdCode, hello, fetch: h.fetch, ...quick });
     await expect(session.waitReady()).rejects.toMatchObject({ code: "hijack_suspected" });
     expect((await session.status()).state).toBe("stopped");
-    expect(code).not.toContain(session.sessionId);
+    expect(code).not.toBe(stolenIdCode);
     await expect(session.send("browser_type", { text: "private" })).rejects.toMatchObject({
       code: "hijack_suspected",
     });
