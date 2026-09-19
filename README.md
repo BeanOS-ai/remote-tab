@@ -44,7 +44,12 @@ of the server (domains, cloud projects, secrets) lives outside this repo.
 
 ## Server and agent bootstrap
 
-Run `bun install`, then `bun run build`; deploy `dist/main.js` with Bun.
+Use **Bun 1.4.2**, the pinned CI and container build baseline. The committed v2
+lockfile is incompatible with Bun 1.3.13 frozen installs; do not rewrite it or
+disable `--frozen-lockfile` to accommodate an older build image. Newer versions
+require validation before updating the build pin.
+
+Run `bun install --frozen-lockfile`, then `bun run build`; deploy `dist/main.js` with Bun.
 The API is key-optional: anonymous calls default to 10 requests/second/IP.
 Present a platform key with `Authorization: Bearer <key>` on creation or
 bootstrap requests for the operator's resolved QPS. Session requests keep
