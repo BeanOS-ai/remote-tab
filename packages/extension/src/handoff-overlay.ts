@@ -1,13 +1,7 @@
 /** Serialized into a fresh CDP isolated world. No page-world globals or messaging.
- * Keep this function self-contained: it runs with clean DOM intrinsics and a
- * context-scoped binding, never with page-provided code. */
-export function mountHandoff(
-  message: string,
-  bindingName: string,
-  token: string,
-  expiresAt: number,
-) {
-  const signal = (globalThis as unknown as Record<string, (value: string) => void>)[bindingName];
+ * Keep this function self-contained: it runs with clean DOM intrinsics and
+ * no acknowledgement capability. The shared DOM is never a consent boundary. */
+export function mountHandoff(message: string, expiresAt: number) {
   const host = document.createElement("div");
   host.id = "remote-tab-handoff";
   host.setAttribute("popover", "manual");
@@ -26,7 +20,7 @@ export function mountHandoff(
       border-radius: 9px; padding: 10px 15px; background: #243e39; color: #fff;
       cursor: pointer; flex-shrink: 0; }
     button:focus-visible, .message:focus-visible { outline: 3px solid #ffdc80; outline-offset: 3px; }
-    .done { background: #b9f4aa; color: #173326; border-color: #b9f4aa; }
+    .instruction { font-size: 13px; color: #a6edb5; margin-top: 6px; }
     .compact { padding: 10px 14px; border: 2px solid #a6edb5; background: #172b29;
       box-shadow: 0 4px 20px #0005; border-radius: 24px; }
     [hidden] { display: none !important; }
@@ -51,10 +45,13 @@ export function mountHandoff(
   text.textContent = message;
   text.tabIndex = 0;
   text.setAttribute("role", "status");
-  const done = document.createElement("button");
-  done.className = "done";
-  done.textContent = "Done";
-  done.type = "button";
+  const instruction = document.createElement("div");
+  instruction.className = "instruction";
+  instruction.textContent =
+    "When finished, open Remote Tab in the browser toolbar and choose Done.";
+  const request = document.createElement("div");
+  request.className = "message";
+  request.append(text, instruction);
   const collapse = document.createElement("button");
   collapse.textContent = "Collapse";
   collapse.type = "button";
@@ -65,7 +62,7 @@ export function mountHandoff(
   compact.type = "button";
   compact.hidden = true;
   compact.setAttribute("aria-label", "Expand Remote Tab request — your turn");
-  bar.append(identity, text, done, collapse);
+  bar.append(identity, request, collapse);
   root.append(style, bar, compact);
   let collapsed = false;
   let top = false;
@@ -87,15 +84,8 @@ export function mountHandoff(
     compact.hidden = !value;
     position();
   }
-  // isTrusted cannot be set by dispatchEvent(), HTMLElement.click(), postMessage,
-  // or a page-created KeyboardEvent. Never expose Done as a DOM/message command.
-  done.addEventListener("click", (event) => {
-    if (!event.isTrusted || !alive || Date.now() >= Math.min(lease, expiry)) return;
-    event.stopPropagation();
-    signal(token);
-    done.disabled = true;
-    done.textContent = "Sending…";
-  });
+  // The page can hide, move, or cover the host despite its closed shadow root.
+  // These controls only change presentation; Done lives in the extension popup.
   collapse.addEventListener("click", (event) => {
     if (!event.isTrusted) return;
     setCollapsed(true);
@@ -104,10 +94,9 @@ export function mountHandoff(
   compact.addEventListener("click", (event) => {
     if (!event.isTrusted) return;
     setCollapsed(false);
-    done.focus();
+    collapse.focus();
   });
-  function avoidField(event?: Event) {
-    const element = event?.target ?? document.activeElement;
+  function avoidField(element: EventTarget | null = document.activeElement) {
     if (
       !(element instanceof Element) ||
       element === host ||
@@ -127,14 +116,17 @@ export function mountHandoff(
       position();
     }
   }
-  document.addEventListener("focusin", avoidField, true);
-  document.addEventListener("scroll", avoidField, true);
-  window.addEventListener("resize", avoidField);
+  const onFocus = (event: Event) => avoidField(event.target);
+  const onViewport = () => avoidField();
+  document.addEventListener("focusin", onFocus, true);
+  document.addEventListener("scroll", onViewport, true);
+  window.addEventListener("resize", onViewport);
   function restore() {
     if (!alive) return;
     if (!host.isConnected) document.documentElement.append(host);
     position();
     if (!host.matches(":popover-open")) host.showPopover();
+    avoidField();
   }
   restore();
   avoidField();
@@ -148,9 +140,9 @@ export function mountHandoff(
     alive = false;
     clearInterval(timer);
     observer.disconnect();
-    document.removeEventListener("focusin", avoidField, true);
-    document.removeEventListener("scroll", avoidField, true);
-    window.removeEventListener("resize", avoidField);
+    document.removeEventListener("focusin", onFocus, true);
+    document.removeEventListener("scroll", onViewport, true);
+    window.removeEventListener("resize", onViewport);
     host.remove();
   }
   const timer = setInterval(() => {
@@ -162,10 +154,6 @@ export function mountHandoff(
     refresh(deadline?: number) {
       if (deadline !== undefined && Number.isFinite(deadline)) expiry = deadline;
       lease = Date.now() + 5000;
-    },
-    retry() {
-      done.disabled = false;
-      done.textContent = "Done";
     },
   };
 }

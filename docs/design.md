@@ -385,8 +385,8 @@ real task and it does not widen what the human consented to.
 ## 7. Extension
 
 Evolves the published **Bean Tab Share** 1.1.2 (same Web Store listing, new
-major version) rather than a second listing. Manifest v3; permissions `tabs`
-and `debugger`; host permission for the server origin only. Unused legacy
+major version) rather than a second listing. Manifest v3; permissions `tabs`,
+`debugger`, and `notifications` (handoff attention only); host permission for the server origin only. Unused legacy
 `scripting` and `storage` permissions are omitted. `REMOTE_TAB_SERVER_ORIGIN` is a
 build-time distribution setting, compiled into both the worker and manifest; the
 repository default is `https://remote-tab.example`. Chrome 125 or newer is
@@ -414,6 +414,11 @@ shared: shared tab title and origin, **Go to shared tab** when viewing another
 tab, a live feed of actions in plain words ("clicked Submit", "typed into Search"), a **Stop** button that is always visible, an
 **Extend** button near expiry, the handoff banner with **Done**, and a
 **Pause** / **Resume** control with a timestamped **Paused by you** state.
+The on-page handoff banner is informational: its host remains page-controlled,
+so it has no Done button or acknowledgement bridge. Completion requires the
+extension-owned popup's Done control. The action badge and handoff notification
+remain visible independently of page DOM; notification clicks focus the shared
+tab/window without acknowledging the handoff.
 
 Behaviour:
 

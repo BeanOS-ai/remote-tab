@@ -165,11 +165,7 @@ async function handle(message: unknown) {
       if (boundShare?.interrupted && !maintenance) throw new DriverError("paused", "Paused by you");
       return rawCdp(method, params);
     };
-    const newAttention = new HandoffAttention(rawCdp, async (id) => {
-      if (!boundShare?.state.sharing || boundShare.state.handoff?.id !== id)
-        throw new Error("This handoff is no longer pending");
-      await boundShare.done();
-    });
+    const newAttention = new HandoffAttention(rawCdp);
     attention = newAttention;
     const privacy = new PrivacyGuard(cdp);
     await privacy.scan();
@@ -196,7 +192,7 @@ async function handle(message: unknown) {
     boundShare = await SharedSession.connect({
       isCancelled: () => pending.cancelled,
       onHandoff: (handoff, expiresAt) => {
-        if (handoff) newAttention.show(handoff.id, handoff.message, expiresAt);
+        if (handoff) newAttention.show(handoff.message, expiresAt);
         else return newAttention.clear();
       },
       onStop: (share, settled) => {
@@ -263,14 +259,12 @@ chrome.debugger.onEvent.addListener((target, method, params) => {
     return active?.stop();
   };
   if (!target.sessionId) {
-    // Revoke before processing any document transition; never carry a Done
-    // capability or attention message onto a new page, including same-document navigation.
+    // Clear attention before any document transition, including same-document navigation.
     if (
       (method === "Page.frameNavigated" && record(params?.frame) && !params.frame.parentId) ||
       (method === "Page.navigatedWithinDocument" && driver?.isMainFrame(params?.frameId))
     )
       void attention?.clear();
-    void attention?.onEvent(method, params ?? {}).catch(failed);
     void driver?.onEvent(method, params ?? {}).catch(failed);
   }
 });

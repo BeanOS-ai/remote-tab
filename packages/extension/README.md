@@ -1,7 +1,7 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-18
-last_reviewed: 2026-09-18
+last_updated: 2026-09-19
+last_reviewed: 2026-09-19
 ---
 
 # Remote Tab Chrome extension
@@ -115,9 +115,11 @@ before release. A passing automated suite does not replace that human check.
 
 ## Handoff attention (2.2.0)
 
-A pending handoff displays the agent's request and Done in an edge-anchored
-Remote Tab bar. Collapse leaves a persistent button; focusing a field covered
-by the bar collapses and moves it to the opposite edge. Buttons support keyboard
+A pending handoff displays the agent's request in an informational, edge-anchored
+Remote Tab bar. To acknowledge it, open Remote Tab from the browser toolbar and
+choose **Done** in the extension popup. Collapse leaves a persistent button; focusing a field covered
+by the bar collapses and moves it to the opposite edge, including after scrolling
+or resizing while the field stays focused. Buttons support keyboard
 navigation, and the UI has no motion. The action badge/title and a notification
 also identify a pending handoff; clicking the notification focuses the shared
 tab and its window. Toast display remains subject to OS notification settings.
@@ -125,15 +127,17 @@ Explicit Pause stays quiet. Done, Pause, Stop, navigation and expiry clear
 attention; a handoff cleared by navigation or Pause remains completable in the
 popup. No new host permissions are added.
 
-The bar runs in its own Chrome isolated world with a closed shadow root and a
-context-scoped CDP binding. Done requires an `isTrusted` browser click (including
-keyboard activation) and a one-handoff capability, checked against the active
-session. There is no page `postMessage`, custom-event, or runtime-message bridge.
-The page cannot inspect the closed root or call that binding. A short renewable
-lease removes orphaned UI within five seconds after worker/debugger loss; the
-session deadline independently expires it. No capability or session key is
-stored persistently. Host DOM removal cannot acknowledge the request; the UI
-restores itself while alive, with browser-owned badge/notification as fallback.
+The bar runs in a Chrome isolated world with a closed shadow root, but the page
+still controls the host's visibility, position and stacking. It is therefore
+**never a consent surface**: it has no Done button, acknowledgement capability,
+CDP binding, or message bridge to the worker. Its buttons only collapse/expand
+presentation. Real clicks on a hidden, moved, resized or covered host cannot
+complete a handoff. The authoritative Done control lives in the extension-owned
+popup, outside page-controlled DOM; badge and notification also live outside it.
+A short renewable lease removes orphaned UI within five seconds after
+worker/debugger loss, and the session deadline independently expires it. The
+banner restores itself while alive as best-effort attention, not as a security
+guarantee. Page tampering can suppress that reminder but cannot grant consent.
 
 Navigation performs privacy preflight before moving the tab. If a later
 inspection or screenshot mask fails after navigation, the response succeeds

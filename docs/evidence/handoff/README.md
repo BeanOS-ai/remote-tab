@@ -18,20 +18,23 @@ HANDOFF_SCREENSHOTS=docs/evidence/handoff bun tests/browser/handoff.mjs
 ```
 
 - `before.png`: ordinary form before the request.
-- `pending.png`: visible request with Done and Collapse controls.
+- `pending.png`: informational request with popup Done instructions and Collapse.
 - `collapsed.png`: compact request reminder; no acknowledgement was sent.
 - `focused-field.png`: reminder moved above an overlapping, editable form field.
-- `cleared.png`: request removed after trusted human completion.
+- `cleared.png`: request removed by the attention controller.
 
-The runner asserts that the page world cannot access the closed shadow root or
-isolated binding; forged clicks, keyboard events, and messages cannot complete
-the request; trusted mouse and keyboard activation can complete it. It also
-checks collapse/expand, reduced motion, recovery after DOM removal or style
-tampering, editing the underlying page, explicit clearing, and expiry.
+The runner asserts that the page world cannot access the closed shadow root,
+and there is no Done control or acknowledgement capability in the banner.
+Page scripts restyle the public host (transparent, hidden, moved, resized, and
+covered by another top-layer element); real mouse/keyboard input must emit no
+acknowledgement. It also checks collapse/expand, reduced motion, DOM removal,
+editing the underlying page, explicit clearing, expiry, and overlap avoidance
+while a field stays focused across viewport resize, document scroll and
+container scroll.
 
-This standalone check covers the production UI's browser boundary. It does not
-establish the installed extension worker's relay lifecycle, popup interaction,
-notification behavior, or ledger delivery. The separate `tests/browser/run.mjs`
-runner covers the installed worker. In this session that runner could not start
-because the baked dependency tree lacked `rate-limiter-flexible`; no dependencies
-were installed to work around that limit. CI runs both browser checks.
+The separate `tests/browser/run.mjs` exercises the installed production worker
+and relay. It attacks the real host while the popup is closed and asserts that
+the handoff remains pending and agent commands remain blocked, then completes
+through a real click in the extension popup. The attack targets the old Done
+button when present so the vulnerable implementation fails the regression.
+CI runs both checks; screenshots are uploaded by the browser job.

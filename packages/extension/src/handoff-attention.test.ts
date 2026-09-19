@@ -11,8 +11,6 @@ function fixture() {
   let title = "";
   let notifications = 0;
   const calls: { method: string; params: Record<string, unknown> }[] = [];
-  const done: string[] = [];
-  let failDone = false;
   let cdpHook: ((method: string, params: Record<string, unknown>) => Promise<unknown>) | undefined;
   Object.assign(globalThis, {
     chrome: {
@@ -36,48 +34,27 @@ function fixture() {
       },
     },
   });
-  const attention = new HandoffAttention(
-    async (method, params = {}) => {
-      calls.push({ method, params });
-      const override = await cdpHook?.(method, params);
-      if (override !== undefined) return override;
-      if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "shared" } } };
-      if (method === "Page.createIsolatedWorld") return { executionContextId: 71 };
-      if (method === "Runtime.evaluate") return { result: { objectId: "ui" } };
-      return {};
-    },
-    async (id) => {
-      if (failDone) throw new Error("offline");
-      done.push(id);
-    },
-  );
+  const attention = new HandoffAttention(async (method, params = {}) => {
+    calls.push({ method, params });
+    const override = await cdpHook?.(method, params);
+    if (override !== undefined) return override;
+    if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "shared" } } };
+    if (method === "Page.createIsolatedWorld") return { executionContextId: 71 };
+    if (method === "Runtime.evaluate") return { result: { objectId: "ui" } };
+    return {};
+  });
   const ready = async () => {
     for (let i = 0; i < 100 && !calls.some((c) => c.method === "Runtime.evaluate"); i++)
       await Bun.sleep(1);
     expect(calls.some((c) => c.method === "Runtime.evaluate")).toBe(true);
   };
-  const binding = () => {
-    const call = calls.find((c) => c.method === "Runtime.addBinding");
-    const world = calls.find((c) => c.method === "Page.createIsolatedWorld");
-    if (!call || !world) throw new Error("No isolated binding");
-    return {
-      name: call.params.name,
-      executionContextId: 71,
-      payload: String(world.params.worldName).replace("remote-tab-handoff-", ""),
-    };
-  };
   return {
     attention,
     calls,
-    done,
     ready,
-    binding,
     badge: () => badge,
     title: () => title,
     notifications: () => notifications,
-    fail: (value: boolean) => {
-      failDone = value;
-    },
     hook: (value: typeof cdpHook) => {
       cdpHook = value;
     },
@@ -103,25 +80,26 @@ test("a rejected refresh from an old handoff cannot revoke the new handoff", asy
     return undefined;
   });
   try {
-    h.attention.show("old", "Old request", expiry());
+    h.attention.show("Old request", expiry());
     await until(() => rejectOld !== undefined);
     await h.attention.clear();
     h.hook(undefined);
     h.calls.length = 0;
-    h.attention.show("new", "New request", expiry());
+    h.attention.show("New request", expiry());
     await h.ready();
     rejectOld?.(new Error("Old context destroyed"));
     await Bun.sleep(10);
     expect(h.badge()).toBe("!");
     expect(h.notifications()).toBe(1);
-    await h.attention.onEvent("Runtime.bindingCalled", h.binding());
-    expect(h.done).toEqual(["new"]);
+    expect(h.calls.find((c) => c.method === "Runtime.evaluate")?.params.expression).toContain(
+      "New request",
+    );
   } finally {
     await h.attention.clear();
   }
 });
 
-test("a rejected installation from an old handoff preserves the queued handoff capability", async () => {
+test("a rejected installation from an old handoff preserves the queued attention", async () => {
   const h = fixture();
   let rejectOld: ((error: Error) => void) | undefined;
   h.hook(async (method) => {
@@ -132,90 +110,97 @@ test("a rejected installation from an old handoff preserves the queued handoff c
     return undefined;
   });
   try {
-    h.attention.show("old", "Old request", expiry());
+    h.attention.show("Old request", expiry());
     await until(() => rejectOld !== undefined);
-    h.attention.show("new", "New request", expiry());
+    h.attention.show("New request", expiry());
     h.hook(undefined);
     rejectOld?.(new Error("Old document replaced"));
     await h.ready();
     expect(h.badge()).toBe("!");
     expect(h.notifications()).toBe(1);
-    await h.attention.onEvent("Runtime.bindingCalled", h.binding());
-    expect(h.done).toEqual(["new"]);
+    expect(h.calls.find((c) => c.method === "Runtime.evaluate")?.params.expression).toContain(
+      "New request",
+    );
   } finally {
     await h.attention.clear();
   }
 });
 
-test("only the isolated context and current capability can complete a handoff", async () => {
+test("informational attention installs no acknowledgement binding and clears its remote object", async () => {
   const h = fixture();
   try {
-    h.attention.show("handoff-one", "Fill in the form", expiry());
+    h.attention.show("Fill in the form", expiry());
     await h.ready();
     expect(h.badge()).toBe("!");
     expect(h.title()).toContain("your turn");
     expect(h.notifications()).toBe(1);
-    const event = h.binding();
-    for (const forged of [
-      { ...event, executionContextId: 1 },
-      { ...event, payload: "guessed" },
-      { ...event, name: "forged" },
-      { ...event, executionContextId: undefined },
-    ])
-      await h.attention.onEvent("Runtime.bindingCalled", forged);
-    expect(h.done).toEqual([]);
-    await h.attention.onEvent("Runtime.bindingCalled", event);
-    await h.attention.onEvent("Runtime.bindingCalled", event);
-    expect(h.done).toEqual(["handoff-one"]);
+    expect(h.calls.some((c) => c.method === "Runtime.addBinding")).toBe(false);
+    expect(h.calls.find((c) => c.method === "Runtime.evaluate")?.params.contextId).toBe(71);
     await h.attention.clear();
     expect(h.badge()).toBe("");
     expect(h.title()).toBe("Remote Tab");
     expect(h.notifications()).toBe(0);
-    expect(h.calls.some((c) => c.method === "Runtime.removeBinding")).toBe(true);
-  } finally {
-    await h.attention.clear();
-  }
-});
-
-test("clear revokes Done synchronously and a later session rejects the old event", async () => {
-  const h = fixture();
-  try {
-    h.attention.show("old", "Old request", expiry());
-    await h.ready();
-    const old = h.binding();
-    const clearing = h.attention.clear();
-    await h.attention.onEvent("Runtime.bindingCalled", old);
-    await clearing;
-    h.calls.length = 0;
-    h.attention.show("new", "New request", expiry());
-    await h.ready();
-    await h.attention.onEvent("Runtime.bindingCalled", old);
-    expect(h.done).toEqual([]);
-    await h.attention.onEvent("Runtime.bindingCalled", h.binding());
-    expect(h.done).toEqual(["new"]);
-  } finally {
-    await h.attention.clear();
-  }
-});
-
-test("a failed delivery permits a real retry; a cancelled installation leaves no attention", async () => {
-  const h = fixture();
-  try {
-    h.attention.show("retry", "Please confirm", expiry());
-    await h.ready();
-    h.fail(true);
-    await h.attention.onEvent("Runtime.bindingCalled", h.binding());
-    expect(h.done).toEqual([]);
-    expect(h.calls.some((c) => c.params.functionDeclaration === "function(){this.retry()}")).toBe(
+    expect(h.calls.some((c) => c.params.functionDeclaration === "function(){this.clear()}")).toBe(
       true,
     );
-    h.fail(false);
-    await h.attention.onEvent("Runtime.bindingCalled", h.binding());
-    expect(h.done).toEqual(["retry"]);
-    h.attention.show("cancelled", "Must not appear", expiry());
+    expect(
+      h.calls.some((c) => c.method === "Runtime.releaseObject" && c.params.objectId === "ui"),
+    ).toBe(true);
+    expect(h.calls.some((c) => c.method === "Runtime.removeBinding")).toBe(false);
+  } finally {
+    await h.attention.clear();
+  }
+});
+
+test("an extended lease is passed to the informational banner", async () => {
+  const h = fixture();
+  try {
+    h.attention.show("Please confirm", expiry());
+    await h.ready();
+    const deadline = Date.now() + 120000;
+    await h.attention.extend(new Date(deadline).toISOString());
+    expect(
+      h.calls.some((c) => c.params.functionDeclaration === `function(){this.refresh(${deadline})}`),
+    ).toBe(true);
+  } finally {
+    await h.attention.clear();
+  }
+});
+
+test("a cancelled installation leaves no attention", async () => {
+  const h = fixture();
+  try {
+    h.attention.show("Must not appear", expiry());
     await h.attention.clear();
     expect(h.badge()).toBe("");
     expect(h.notifications()).toBe(0);
+    expect(h.calls.some((c) => c.method === "Runtime.evaluate")).toBe(false);
+  } finally {
+    await h.attention.clear();
+  }
+});
+
+test("clear waits for a late installation and removes its remote object", async () => {
+  const h = fixture();
+  let finishInstall: ((value: unknown) => void) | undefined;
+  h.hook(async (method) => {
+    if (method === "Runtime.evaluate")
+      return new Promise((resolve) => {
+        finishInstall = resolve;
+      });
+    return undefined;
+  });
+  try {
+    h.attention.show("Old request", expiry());
+    await until(() => finishInstall !== undefined);
+    const clearing = h.attention.clear();
+    finishInstall?.({ result: { objectId: "late-ui" } });
+    await clearing;
+    expect(h.badge()).toBe("");
+    expect(h.notifications()).toBe(0);
+    expect(
+      h.calls.some((c) => c.method === "Runtime.releaseObject" && c.params.objectId === "late-ui"),
+    ).toBe(true);
   } finally {
     await h.attention.clear();
   }
@@ -224,7 +209,7 @@ test("a failed delivery permits a real retry; a cancelled installation leaves no
 test("worker startup removes surviving browser chrome from a previous worker", async () => {
   const h = fixture();
   try {
-    h.attention.show("stale", "Stale request", expiry());
+    h.attention.show("Stale request", expiry());
     await h.ready();
     await clearAttentionChrome();
     expect(h.badge()).toBe("");

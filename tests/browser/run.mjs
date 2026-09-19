@@ -128,7 +128,7 @@ async function attentionState(pending) {
     return state;
   }, pending);
 }
-async function handoffDonePosition(tab) {
+async function handoffControlPosition(tab) {
   return worker.evaluate(async (url) => {
     const tab = (await chrome.tabs.query({})).find((tab) => tab.url === url);
     const target = { tabId: tab.id };
@@ -146,6 +146,7 @@ async function handoffDonePosition(tab) {
       while (id && id !== host.shadowRoots[0].nodeId) id = parents.get(id);
       return Boolean(id);
     });
+    const controls = [];
     for (const node of descendants.filter((node) => node.nodeName === "BUTTON")) {
       const { object } = await chrome.debugger.sendCommand(target, "DOM.resolveNode", {
         nodeId: node.nodeId,
@@ -154,20 +155,26 @@ async function handoffDonePosition(tab) {
         const { result } = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
           objectId: object.objectId,
           functionDeclaration: `function(){
-            if(this.textContent !== "Done") return null;
             const r = this.getBoundingClientRect();
-            return { x:r.x+r.width/2, y:r.y+r.height/2 };
+            if(!r.width || !r.height) return null;
+            const host = this.getRootNode().host.getBoundingClientRect();
+            return { label:this.textContent, x:r.x+r.width/2, y:r.y+r.height/2,
+              hostX:host.x, hostY:host.y };
           }`,
           returnByValue: true,
         });
-        if (result.value) return result.value;
+        if (result.value) controls.push(result.value);
       } finally {
         await chrome.debugger.sendCommand(target, "Runtime.releaseObject", {
           objectId: object.objectId,
         });
       }
     }
-    throw new Error("Installed worker handoff Done button missing");
+    // Prefer the old vulnerable Done if present: the regression must exercise
+    // clickjacking on a reverted build, not fail merely because a label changed.
+    const control = controls.find((control) => control.label === "Done") || controls[0];
+    if (!control) throw new Error("Installed worker handoff presentation control missing");
+    return control;
   }, tab.url());
 }
 async function stop(tab, popup, session) {
@@ -404,23 +411,121 @@ try {
       AgentSession.resume(session.exportState(), options).send("browser_click", { ref: submit }),
       { code: "handoff_pending" },
     );
-    const donePosition = await handoffDonePosition(tab);
-    await tab.mouse.click(donePosition.x, donePosition.y);
+    for (const attack of ["transparent", "hidden", "top-layer-cover", "top-layer-decoy"]) {
+      const control = await handoffControlPosition(tab);
+      const point = { x: 320, y: 180 };
+      await tab.evaluate(
+        ({ attack, control, point }) => {
+          const host = document.querySelector("#remote-tab-handoff");
+          const originalStyle = host.style.cssText;
+          const play = document.createElement("button");
+          play.id = "page-play-video";
+          play.textContent = "Play video";
+          play.style.cssText = `position:fixed;left:${point.x - 90}px;top:${point.y - 30}px;
+            width:180px;height:60px;z-index:2147483647;background:white;color:black`;
+          document.body.append(play);
+          // Page-world code can restyle and reposition the host without access
+          // to its closed shadow root. Scale also enlarges its hidden hit target.
+          const scale = 1.4;
+          const dx = point.x - control.hostX - (control.x - control.hostX) * scale;
+          const dy = point.y - control.hostY - (control.y - control.hostY) * scale;
+          host.style.setProperty("transform-origin", "0 0", "important");
+          host.style.setProperty(
+            "transform",
+            `translate(${dx}px,${dy}px) scale(${scale})`,
+            "important",
+          );
+          host.style.setProperty("opacity", attack === "transparent" ? "0" : "1", "important");
+          host.style.setProperty(
+            "visibility",
+            attack === "hidden" ? "hidden" : "visible",
+            "important",
+          );
+          const attackStyle = host.style.cssText;
+          // Keep page styling in force across the banner's periodic repair.
+          const observer = new MutationObserver(() => {
+            if (host.style.cssText !== attackStyle) host.style.cssText = attackStyle;
+          });
+          observer.observe(host, { attributes: true, attributeFilter: ["style"] });
+          let cover;
+          if (attack.startsWith("top-layer")) {
+            cover = document.createElement("div");
+            cover.id = "page-video-cover";
+            cover.setAttribute("popover", "manual");
+            cover.textContent = "Play video";
+            cover.style.cssText = `position:fixed;inset:auto;margin:0;
+              left:${point.x - 90}px;top:${point.y - 30}px;width:180px;height:60px;
+              background:white;color:black;border:0;pointer-events:${attack === "top-layer-decoy" ? "none" : "auto"}`;
+            document.body.append(cover);
+            cover.showPopover();
+          }
+          window.handoffAttackClicks = [];
+          const capture = (event) =>
+            window.handoffAttackClicks.push({
+              trusted: event.isTrusted,
+              target: event.target.id,
+            });
+          document.addEventListener("click", capture, true);
+          window.cleanupHandoffAttack = () => {
+            observer.disconnect();
+            host.style.cssText = originalStyle;
+            document.removeEventListener("click", capture, true);
+            play.remove();
+            cover?.remove();
+            window.cleanupHandoffAttack = undefined;
+          };
+        },
+        { attack, control, point },
+      );
+      try {
+        const expectedTarget =
+          attack === "hidden"
+            ? "page-play-video"
+            : attack === "top-layer-cover"
+              ? "page-video-cover"
+              : "remote-tab-handoff";
+        assert.equal(
+          await tab.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id, point),
+          expectedTarget,
+          `${attack} must position the intended click target`,
+        );
+        await tab.mouse.click(point.x, point.y);
+        assert.deepEqual(
+          await tab.evaluate(() => window.handoffAttackClicks),
+          [{ trusted: true, target: expectedTarget }],
+          `${attack} must deliver a real trusted click`,
+        );
+        await assert.rejects(
+          AgentSession.resume(session.exportState(), options).send("browser_click", {
+            ref: submit,
+          }),
+          { code: "handoff_pending" },
+          `${attack} must not unblock agent commands`,
+        );
+        assert.equal(handedOff, false, `${attack} must not acknowledge handoff`);
+        assert.equal((await attentionState(true)).badge, "!");
+      } finally {
+        await tab.evaluate(() => window.cleanupHandoffAttack());
+      }
+    }
+    popup = await popupFor(tab);
+    await popup.locator("#handoff").waitFor({ state: "visible" });
+    await popup.bringToFront();
+    await popup.locator("#done").click();
     await handoff;
+    assert.equal(handedOff, true);
     await tab.locator("#remote-tab-handoff").waitFor({ state: "detached" });
     const clearedAttention = await attentionState(false);
     assert.equal(clearedAttention.badge, "");
     assert.equal(clearedAttention.title, "Remote Tab");
     assert.equal(clearedAttention.notifications["remote-tab-handoff"], undefined);
     report(
-      "closed-popup handoff: installed worker badge/notification, forgery rejection, native in-tab Done and attention cleanup",
+      "closed-popup handoff: page restyling, hidden/moved/resized host and top-layer clickjacking cannot acknowledge; trusted extension popup Done clears attention",
     );
-    // A later request must still support the extension popup's existing Done path.
-    popup = await popupFor(tab);
     const nextHandoff = session.handoff("Review again, then use the extension Done button");
     await popup.locator("#handoff").waitFor({ state: "visible" });
     await tab.locator("#remote-tab-handoff").waitFor({ state: "visible" });
-    await clickControl(popup, "done");
+    await popup.locator("#done").click();
     await nextHandoff;
     await tab.locator("#remote-tab-handoff").waitFor({ state: "detached" });
     assert.equal((await attentionState(false)).badge, "");

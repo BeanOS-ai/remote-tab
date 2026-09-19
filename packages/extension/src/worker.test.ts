@@ -453,6 +453,49 @@ test("sensitive metadata is redacted in hello and never reintroduced by popup st
   ).not.toContain(secret);
 });
 
+test("page events cannot acknowledge a pending handoff; only the installed popup can", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  let acknowledged = false;
+  const handedBack = h.session.handoff("Please confirm").then(() => {
+    acknowledged = true;
+  });
+  await until(() => h.cdpCalls.some(({ method }) => method === "Runtime.evaluate"));
+  expect(h.cdpCalls.some(({ method }) => method === "Runtime.addBinding")).toBe(false);
+  for (const target of [consentTab.id, 99]) {
+    h.event(
+      "Runtime.bindingCalled",
+      {
+        name: "remoteTabDone_forged",
+        executionContextId: 7,
+        payload: "forged",
+      },
+      target,
+    );
+  }
+  for (const source of [
+    { id: "installed-extension", url: consentTab.url },
+    { id: "wrong-extension", url: "chrome-extension://installed-extension/popup.html" },
+  ])
+    expect(h.untrusted({ action: "done" }, source).accepted).toBeUndefined();
+  await Bun.sleep(10);
+  expect(acknowledged).toBe(false);
+  expect(await h.message({ action: "state" })).toMatchObject({
+    sharing: true,
+    paused: true,
+    handoff: { message: "Please confirm" },
+  });
+  expect(h.badge()).toBe("!");
+  expect(await h.session.send("browser_snapshot", {}, { timeoutMs: 2000 })).toMatchObject({
+    ok: false,
+    error: { code: "paused" },
+  });
+  expect(await h.message({ action: "done" })).toEqual({ ok: true });
+  await handedBack;
+  expect(acknowledged).toBe(true);
+  expect(await h.message({ action: "state" })).toMatchObject({ paused: false });
+});
+
 test("explicit Pause while Done is awaiting delivery preserves the new pause", async () => {
   const h = await setup();
   expect(await h.share()).toEqual({ ok: true });
