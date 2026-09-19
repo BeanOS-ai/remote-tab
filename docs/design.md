@@ -62,7 +62,7 @@ Non-goals (v1), explicitly deferred:
 | **Human** | Chrome + remote-tab extension | the session secret (from the pasted code) |
 | **Agent** | anywhere (via client lib → MCP or CLI) | the session secret + an agent token |
 | **Server** | any host of this repo's server (BeanOS runs one; self-hostable) | ciphertext, sequence numbers, tokens; **never the secret with independently trusted clients** (§5.5) |
-| **Store** | Google Cloud Storage behind the server | ciphertext objects with a TTL lifecycle |
+| **Store** | Memory by default; optional Firestore + GCS adapter | ciphertext and bookkeeping; expiry cleanup |
 
 ## 4. Session lifecycle
 
@@ -118,8 +118,8 @@ three-part format was never distributed.
    extension** (an extension page, code shipped with the extension), which
    decrypts locally, verifies the hash chain, and offers JSON + PNG export and
    a GIF/video render. The agent side can do the same through the CLI. The
-   server serves no ledger page (§5.5). Objects are deleted by the store's
-   lifecycle rule 24 hours after expiry; the export is the durable copy.
+   server serves no ledger page (§5.5). Store cleanup follows §5.3 retention
+   eligibility; deletion is asynchronous. The export is the durable copy.
 
 ## 5. Transport: the dead drop
 
@@ -179,21 +179,28 @@ serves no pages (§5.5).
 | `POST /v1/sessions/{id}/stop` | agent or browser | terminal |
 | `GET /v1/sessions/{id}` | agent or browser | `{state, expires_at, last_seq, redeemed}` (no content) |
 
-The server keeps per-session state (tokens as SHA-256 hashes, state, last
-seq/hash, expiry) as `sessions/{id}/state.json` and message/blob bodies as
-`sessions/{id}/msgs/{uuid}.json` and `sessions/{id}/blobs/{blob_id}`, all in
-GCS. Each immutable message object points to its previous committed object.
-An append first writes its candidate message, then publishes its pointer and
-seq/hash with a generation-matched compare-and-swap on `state.json`. Readers
-follow only committed pointers and report missing committed objects as errors.
-Failed writes cannot advance the cursor; losing or crashed candidates remain
-unreachable until lifecycle cleanup. Reading a page walks the committed suffix
-backwards, costing one read per message after the requested sequence even when
-the page limit is smaller. Two server instances cannot commit the same `seq`.
-A memory store with the same interface serves tests and local development. A bucket
-lifecycle rule deletes everything 24 h after `expires_at`. Message size cap
-64 KiB; larger payloads (screenshots, DOM dumps) go through blobs and the
-message carries the blob id.
+The default store is **in-memory only**, suitable for a single instance; restart
+loses sessions. Self-hosters may implement the same `Store` boundary. The optional
+`packages/store-gcp` adapter uses Firestore for session state/messages and GCS
+only for ciphertext blobs. The former GCS `state.json`/message-pointer store is
+retired. Select `REMOTE_TAB_STORE=memory|gcp` (default `memory`); unknown values
+fail startup. GCP uses ADC, `REMOTE_TAB_FIRESTORE_DATABASE` (default `(default)`),
+and `REMOTE_TAB_GCS_BUCKET`. Memory mode does not initialize cloud clients.
+
+Firestore stores one `sessions/{id}` document with token hashes, state, expiry,
+and chain head; its `messages` subcollection holds immutable sequence documents.
+Append transactions check state/expiry, `prev_hash`, and caps, then atomically
+create the message and advance seq/hash. Long-poll uses `onSnapshot` on the head
+with timeout/expiry cleanup. Random incarnations isolate retained children from
+reused session IDs. GCS uploads are create-only after byte reservation (§10).
+
+Session TTL `delete_at` equals `expires_at + 24h`, updated on Extend. Children
+have independent cleanup: messages use TTL at session creation + 60min + 24h; blob
+`Custom-Time` is session creation + 60min with `daysSinceCustomTime: 1`. This prevents
+partial Extend updates, retaining children up to 59min extra. Deletion is
+asynchronous; soft deletion, holds, and backups can retain data longer.
+See [GCP store contract](store-gcp.md) for provisioning and validation details.
+Message cap remains 64 KiB; larger ciphertext goes through blobs.
 
 ### 5.4 Latency and the upgrade path
 
@@ -556,7 +563,7 @@ exceeds its limits.
 | Blob | 4 MiB | fixed |
 | Long-poll wait | 25 s | 25 s |
 | Snapshot size | 200 KiB | fixed; agent narrows with `ref` |
-| Object retention after expiry | 24 h | fixed |
+| Cleanup eligibility | expiry +24h | child retention/deletion caveats (§5.3) |
 | Anonymous API requests per client IP per second | 10 | `REMOTE_TAB_ANONYMOUS_QPS`; 0 requires keys |
 | Keyed API requests per subject per second | resolved QPS | 0 unlimited; per instance (§5.6) |
 | Concurrent sessions per client IP | 20 | `REMOTE_TAB_ACTIVE_PER_IP` |
@@ -585,19 +592,18 @@ Invalid/missing forwarded IPs fall back to the socket peer. IPv6 forms are
 canonicalized and IPv4-mapped peers share the IPv4 quota. Without peer
 information, requests share one `unknown` quota.
 
-The one-second request limits are **per instance** (§5.6), replacing
-`REMOTE_TAB_CREATE_PER_MINUTE`. GCS-backed active caps are shared
-across instances through a generation-matched admission index; unredeemed
-`created` sessions count too, until stop or expiry. Memory storage is local
-only. Blob-byte reservations and message sequence counts are on the session
-record and updated atomically across GCS instances. Blob reservations happen
-before upload; failed/ambiguous uploads conservatively consume budget.
-Admission reservations similarly survive ambiguous failures until expiry.
-The shared `admission/active-sessions.json` index must be excluded from bucket
-cleanup rules. During rollout, drain old instances and allow pre-upgrade
-sessions to expire (at most 60 minutes) before relying on the active caps: old
-session records have no client IP/admission entry or historical blob-byte total.
-Operators should use consistent limit configuration on all instances.
+The one-second request limits remain **per instance** (§5.6). Memory active caps
+are local. The GCP adapter shares active caps through a transactionally updated
+`admission/active` lease document; creation and Extend update the lease and
+session atomically, Stop removes it, and new admission prunes expired leases.
+Unredeemed sessions count. The adapter caps configured global admission at
+1,000 entries to bound document size; deployments use consistent limits.
+Session message counts and blob-byte reservations are transactional. Failed or
+ambiguous uploads conservatively consume budget. Blob authorization linearizes
+at reservation; Stop after it may leave an unreferenced ciphertext object for
+lifecycle cleanup. Store writes recheck expiry, including after async work.
+Switching from the retired GCS store requires draining old sessions first;
+there is no dual-read migration or shared state between the two adapters.
 
 ## 11. Threat model (short form)
 
@@ -722,7 +728,9 @@ own secret store.
    shared backends remain an option. No emails, billing, tier product logic,
    or BeanOS deployment values enter this repo. Anonymous defaults to 10 QPS;
    setting 0 requires keys. The client and CLI/MCP support omitted platform keys.
-3. **Settled for v1: GCS-only session state**, with generation-matched cursor
-   publication (§5.3) and shared admission accounting. Request QPS
-   limits are per instance. The memory store is for tests and local development.
+3. **Decided: memory default; optional Firestore + GCS adapter** (Gilad,
+   2026-09-18). Firestore owns session/message transactions and listeners; GCS
+   stores blobs only (§5.3). Self-hosters may add adapters. The state.json
+   cursor transport is retired. Shared GCP active caps do not change per-instance
+   request QPS. Child retention conservatively covers the maximum Extend window.
 4. **Open (Gilad):** store-facing extension name at open-source time.
