@@ -161,7 +161,7 @@ the server is an API, not a web application.
 
 All bodies are JSON unless noted. Authorization is a bearer token: the
 optional platform API key for create, `agent_token` or `browser_token` afterwards.
-The next server revision uses §5.6: anonymous creation is allowed unless
+The server uses §5.6: anonymous creation is allowed unless
 `REMOTE_TAB_ANONYMOUS_QPS=0`; a supplied platform key must resolve successfully
 and never falls back to anonymous access. Both modes retain the backstops in §10.
 The additional agent bootstrap routes are specified in §5.7; the server
@@ -237,8 +237,7 @@ private; ledger viewing and any future livestream remain installed clients.
 ### 5.6 Key service contract
 
 Operator decision (2026-09-18): open source API optional; BeanOS runs the key
-service and tiers outside this repo. This is the design for the next server
-revision, implemented separately after this amendment merges. The server
+service and tiers outside this repo. The server implements the separately approved contract below. The server
 handles opaque identity and numeric limits only: no email, billing, key
 issuance, or tier-specific product logic belongs here.
 
@@ -486,7 +485,7 @@ not proof of theft. `already_redeemed` remains the separate browser-facing
 one-shot-redeem error (§4.4). No command is sent before a valid hello.
 
 The M2 stdio MCP adapter exposes §6 plus create/wait-ready, configured by
-`REMOTE_TAB_SERVER_URL` and `REMOTE_TAB_API_KEY`. It retains one current
+`REMOTE_TAB_SERVER_URL` and optional `REMOTE_TAB_API_KEY`. It retains one current
 session in memory. The shared client `statusDetails()` recovers verified hello
 metadata without waiting for a new hello; CLI and MCP status include
 transport metadata and authenticated hello mode/scope when available, even

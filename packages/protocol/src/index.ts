@@ -108,6 +108,7 @@ export interface SessionStatus {
 }
 export type ErrorCode =
   | "unauthorized"
+  | "key_service_unavailable"
   | "not_found"
   | "already_redeemed"
   | "id_taken"

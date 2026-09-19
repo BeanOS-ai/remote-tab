@@ -12,7 +12,14 @@ import {
 } from "@remote-tab/protocol";
 import { b64url, chainHash } from "@remote-tab/protocol/src/crypto";
 import { bootstrapResponse } from "./bootstrap";
-import { CreateRateLimiter, DEFAULT_THROTTLES, type ThrottleLimits, clientIp } from "./limits";
+import {
+  type KeyResolver,
+  KeyServiceUnavailable,
+  StaticKeyResolver,
+  hashKey,
+} from "./key-resolver";
+import { DEFAULT_THROTTLES, type ThrottleLimits, clientIp } from "./limits";
+import { QpsLimiter } from "./qps-limiter";
 import {
   ChainMismatch,
   RateLimited,
@@ -22,11 +29,17 @@ import {
   type Store,
   type StoredMessage,
 } from "./store";
+import { LogUsageSink, type UsageEvent, type UsageSink } from "./usage";
 
 export interface AppOptions {
   store: Store;
-  /** platform name → API key. Keys are compared in constant time. */
+  /** Legacy static configuration; prefer keyResolver for explicit QPS policy. */
   apiKeys?: ReadonlyMap<string, string>;
+  keyResolver?: KeyResolver;
+  /** Zero requires a valid key or a session created with one. */
+  anonymousQps?: number;
+  usageSink?: UsageSink;
+  trustProxyHops?: number;
   limits?: Partial<ThrottleLimits>;
   /** Only enable behind a proxy that replaces untrusted forwarded headers. */
   trustProxy?: boolean;
@@ -71,7 +84,7 @@ function newToken(): string {
 
 function bearer(req: Request): string | null {
   const h = req.headers.get("authorization") ?? "";
-  const m = h.match(/^Bearer\s+([A-Za-z0-9_\-.:]+)$/);
+  const m = h.match(/^Bearer[ \t]+([^\s]+)$/i);
   return m ? m[1] : null;
 }
 
@@ -97,9 +110,107 @@ export function createApp(opts: AppOptions): {
   const { store } = opts;
   const now = opts.now ?? (() => new Date());
   const blobMax = opts.blobMaxBytes ?? LIMITS.blobMaxBytes;
-  const apiKeys = opts.apiKeys ?? new Map<string, string>();
+  const resolver = opts.keyResolver ?? new StaticKeyResolver(opts.apiKeys);
+  const anonymousQps = opts.anonymousQps ?? 10;
+  if (!Number.isSafeInteger(anonymousQps) || anonymousQps < 0)
+    throw new Error("anonymousQps must be a nonnegative safe integer");
   const limits = { ...DEFAULT_THROTTLES, ...opts.limits };
-  const createRate = new CreateRateLimiter();
+  const qps = new QpsLimiter();
+  const usage = opts.usageSink ?? new LogUsageSink({ now: () => now().getTime() });
+  type Identity =
+    | { subject: string; tier: string; ip?: never }
+    | { ip: string; tier: string; subject?: never };
+  interface Context {
+    ip: string;
+    identity: Identity;
+    charged: boolean;
+    binding?: { keyHash: string; subject: string };
+    authenticated?: { session: SessionRecord; role: Role | null };
+  }
+  function recordUsage(ctx: Context, kind: UsageEvent["kind"], amount: number): void {
+    try {
+      // Custom sinks cannot turn a successful operation into a failure either.
+      void Promise.resolve(
+        usage.record({ ...ctx.identity, kind, amount, at: now().toISOString() }),
+      ).catch(() => {});
+    } catch {
+      /* Usage is best effort, including injected sinks. */
+    }
+  }
+  async function charge(
+    ctx: Context,
+    identity: Identity,
+    allowance: number,
+    denial = false,
+  ): Promise<void> {
+    ctx.identity = identity;
+    ctx.charged = true;
+    const namespace =
+      identity.subject !== undefined
+        ? "subject"
+        : denial && anonymousQps === 0
+          ? "denied-ip"
+          : "ip";
+    await qps.consume(JSON.stringify([namespace, identity.subject ?? identity.ip]), allowance);
+  }
+  const denialCharge = (ctx: Context) =>
+    charge(ctx, { ip: ctx.ip, tier: "anonymous" }, anonymousQps || 10, true);
+  async function deny(
+    ctx: Context,
+    status: number,
+    code: ErrorCode,
+    message: string,
+  ): Promise<Response> {
+    await denialCharge(ctx);
+    return fail(status, code, message);
+  }
+  async function resolvePolicy(ctx: Context, key: string, hashed: boolean) {
+    try {
+      return await (hashed ? resolver.resolveHash(key) : resolver.resolve(key));
+    } catch {
+      await denialCharge(ctx);
+      throw new KeyServiceUnavailable();
+    }
+  }
+  async function admit(req: Request, ctx: Context): Promise<Response | undefined> {
+    const parts = new URL(req.url).pathname.split("/").filter(Boolean);
+    const isSession = parts[0] === "v1" && parts[1] === "sessions" && parts.length >= 3;
+    if (isSession) {
+      const id = parts[2];
+      if (!SESSION_ID_RE.test(id)) return deny(ctx, 404, "not_found", "no such session");
+      const raw = await store.getSession(id);
+      if (!raw) return deny(ctx, 404, "not_found", "no such session");
+      const redeem = parts.length === 4 && parts[3] === "redeem" && req.method === "POST";
+      let role: Role | null = null;
+      if (!redeem) {
+        const token = bearer(req);
+        if (!token) return deny(ctx, 401, "unauthorized", "missing bearer token");
+        const hashed = await sha256Hex(token);
+        if (constantTimeEqual(hashed, raw.agentTokenHash)) role = "agent";
+        else if (raw.browserTokenHash && constantTimeEqual(hashed, raw.browserTokenHash))
+          role = "browser";
+        if (!role) return deny(ctx, 401, "unauthorized", "token not valid for this session");
+      }
+      ctx.authenticated = { session: effectiveState(raw), role };
+      if (raw.keyBinding) {
+        const claims = await resolvePolicy(ctx, raw.keyBinding.keyHash, true);
+        if (!claims || claims.subject !== raw.keyBinding.subject)
+          return deny(ctx, 401, "unauthorized", "session key is no longer authorized");
+        await charge(ctx, { subject: claims.subject, tier: claims.tier }, claims.qps);
+        return;
+      }
+    } else if (req.headers.has("authorization")) {
+      const key = bearer(req);
+      if (!key) return deny(ctx, 401, "unauthorized", "invalid platform api key");
+      const claims = await resolvePolicy(ctx, key, false);
+      if (!claims) return deny(ctx, 401, "unauthorized", "invalid platform api key");
+      ctx.binding = { keyHash: await hashKey(key), subject: claims.subject };
+      await charge(ctx, { subject: claims.subject, tier: claims.tier }, claims.qps);
+      return;
+    }
+    if (anonymousQps === 0) return deny(ctx, 401, "unauthorized", "platform api key required");
+    await charge(ctx, { ip: ctx.ip, tier: "anonymous" }, anonymousQps);
+  }
 
   function effectiveState(s: SessionRecord): SessionRecord {
     if (s.state !== "stopped" && s.state !== "expired" && new Date(s.expiresAt) <= now()) {
@@ -109,24 +220,16 @@ export function createApp(opts: AppOptions): {
   }
 
   async function authSession(
-    req: Request,
+    ctx: Context,
     id: string,
     allowed: ReadonlyArray<Role>,
   ): Promise<{ session: SessionRecord; role: Role } | Response> {
-    if (!SESSION_ID_RE.test(id)) return fail(404, "not_found", "no such session");
-    const token = bearer(req);
-    if (!token) return fail(401, "unauthorized", "missing bearer token");
-    const raw = await store.getSession(id);
-    if (!raw) return fail(404, "not_found", "no such session");
-    const session = effectiveState(raw);
-    const h = await sha256Hex(token);
-    let role: Role | null = null;
-    if (constantTimeEqual(h, session.agentTokenHash)) role = "agent";
-    else if (session.browserTokenHash && constantTimeEqual(h, session.browserTokenHash))
-      role = "browser";
-    if (!role || !allowed.includes(role))
+    const auth = ctx.authenticated;
+    if (!auth || auth.session.id !== id || !auth.role || !allowed.includes(auth.role))
       return fail(401, "unauthorized", "token not valid for this session");
-    return { session, role };
+    // Key-service resolution may outlast the session TTL. Re-evaluate the
+    // captured record at the authorization boundary after that await.
+    return { session: effectiveState(auth.session), role: auth.role };
   }
 
   function status(s: SessionRecord): SessionStatus {
@@ -140,7 +243,7 @@ export function createApp(opts: AppOptions): {
     };
   }
 
-  async function handle(req: Request, peer?: RequestPeer): Promise<Response> {
+  async function handle(req: Request, ctx: Context): Promise<Response> {
     const bootstrap = bootstrapResponse(req);
     if (bootstrap) return bootstrap;
     const url = new URL(req.url);
@@ -151,13 +254,8 @@ export function createApp(opts: AppOptions): {
     // POST /v1/sessions
     if (parts.length === 2) {
       if (req.method !== "POST") return fail(404, "not_found", "no such route");
-      const key = bearer(req);
-      let platform: string | null = apiKeys.size === 0 ? "open" : null;
-      for (const [name, k] of apiKeys) if (key && constantTimeEqual(key, k)) platform = name;
-      if (!platform) return fail(401, "unauthorized", "invalid platform api key");
-      const ip = clientIp(req, peer?.requestIP(req)?.address, opts.trustProxy === true);
-      const retryAfter = createRate.take(ip, now().getTime(), limits.createPerMinute);
-      if (retryAfter !== null) throw new RateLimited(retryAfter);
+      const ip = ctx.ip;
+      const platform = ctx.identity.subject ?? "open";
       let body: { id?: unknown; ttl_seconds?: unknown } = {};
       try {
         const text = await req.text();
@@ -180,6 +278,7 @@ export function createApp(opts: AppOptions): {
       const record: SessionRecord = {
         id: body.id,
         platform,
+        ...(ctx.binding && { keyBinding: ctx.binding }),
         state: "created",
         createdAt: t.toISOString(),
         expiresAt: new Date(t.getTime() + ttl * 1000).toISOString(),
@@ -202,6 +301,7 @@ export function createApp(opts: AppOptions): {
         expires_at: record.expiresAt,
         redeem_until: record.redeemUntil,
       };
+      recordUsage(ctx, "session_created", 1);
       return json(201, res);
     }
 
@@ -248,7 +348,7 @@ export function createApp(opts: AppOptions): {
     // GET /v1/sessions/{id}
     if (parts.length === 3) {
       if (req.method !== "GET") return fail(404, "not_found", "no such route");
-      const a = await authSession(req, id, ["agent", "browser"]);
+      const a = await authSession(ctx, id, ["agent", "browser"]);
       if (a instanceof Response) return a;
       return json(200, status(a.session));
     }
@@ -256,7 +356,7 @@ export function createApp(opts: AppOptions): {
     // /v1/sessions/{id}/messages
     if (sub === "messages" && parts.length === 4) {
       if (req.method === "POST") {
-        const a = await authSession(req, id, ["agent", "browser"]);
+        const a = await authSession(ctx, id, ["agent", "browser"]);
         if (a instanceof Response) return a;
         if (a.session.state !== "active")
           return fail(409, "session_not_active", `session is ${a.session.state}`);
@@ -295,6 +395,7 @@ export function createApp(opts: AppOptions): {
             (seq) => chainHash(id, seq, body.ciphertext),
             limits.messagesMax,
           );
+          recordUsage(ctx, "message", 1);
           return json(201, { seq: stored.seq, hash: stored.hash });
         } catch (err) {
           if (err instanceof SessionNotActive) {
@@ -311,7 +412,7 @@ export function createApp(opts: AppOptions): {
         }
       }
       if (req.method === "GET") {
-        const a = await authSession(req, id, ["agent", "browser"]);
+        const a = await authSession(ctx, id, ["agent", "browser"]);
         if (a instanceof Response) return a;
         const after = Number(url.searchParams.get("after") ?? "0");
         if (!Number.isInteger(after) || after < 0)
@@ -337,7 +438,7 @@ export function createApp(opts: AppOptions): {
     // /v1/sessions/{id}/blobs[/{blobId}]
     if (sub === "blobs") {
       if (req.method === "POST" && parts.length === 4) {
-        const a = await authSession(req, id, ["agent", "browser"]);
+        const a = await authSession(ctx, id, ["agent", "browser"]);
         if (a instanceof Response) return a;
         if (a.session.state !== "active")
           return fail(409, "session_not_active", `session is ${a.session.state}`);
@@ -349,10 +450,11 @@ export function createApp(opts: AppOptions): {
           return fail(413, "too_large", `blob exceeds ${blobMax} bytes`);
         const blobId = b64url(crypto.getRandomValues(new Uint8Array(18)));
         await store.putBlob(id, blobId, bytes, limits.blobBudgetBytes);
+        recordUsage(ctx, "blob_bytes", bytes.byteLength);
         return json(201, { blob_id: blobId });
       }
       if (req.method === "GET" && parts.length === 5) {
-        const a = await authSession(req, id, ["agent", "browser"]);
+        const a = await authSession(ctx, id, ["agent", "browser"]);
         if (a instanceof Response) return a;
         const blobId = parts[4];
         if (!BLOB_ID_RE.test(blobId)) return fail(404, "not_found", "no such blob");
@@ -369,7 +471,7 @@ export function createApp(opts: AppOptions): {
     // POST /v1/sessions/{id}/extend — browser only
     if (sub === "extend" && parts.length === 4) {
       if (req.method !== "POST") return fail(404, "not_found", "no such route");
-      const a = await authSession(req, id, ["browser"]);
+      const a = await authSession(ctx, id, ["browser"]);
       if (a instanceof Response) return a;
       if (a.session.state !== "active")
         return fail(409, "session_not_active", `session is ${a.session.state}`);
@@ -405,7 +507,7 @@ export function createApp(opts: AppOptions): {
     // POST /v1/sessions/{id}/stop
     if (sub === "stop" && parts.length === 4) {
       if (req.method !== "POST") return fail(404, "not_found", "no such route");
-      const a = await authSession(req, id, ["agent", "browser"]);
+      const a = await authSession(ctx, id, ["agent", "browser"]);
       if (a instanceof Response) return a;
       const updated = await store.updateSession(id, (cur) => ({ ...cur, state: "stopped" }));
       return json(200, status(updated ?? { ...a.session, state: "stopped" }));
@@ -416,10 +518,24 @@ export function createApp(opts: AppOptions): {
 
   return {
     fetch: async (req: Request, peer?: RequestPeer) => {
+      const ctx: Context = {
+        ip: "unknown",
+        identity: { ip: "unknown", tier: "anonymous" },
+        charged: false,
+      };
       try {
-        return await handle(req, peer);
+        ctx.ip = clientIp(
+          req,
+          peer?.requestIP(req)?.address,
+          opts.trustProxy === true,
+          opts.trustProxyHops,
+        );
+        const denied = await admit(req, ctx);
+        if (denied) return denied;
+        return await handle(req, ctx);
       } catch (err) {
         if (err instanceof RateLimited) {
+          recordUsage(ctx, "throttled", 1);
           return json(
             429,
             { error: "rate_limited", message: err.message },
@@ -428,9 +544,11 @@ export function createApp(opts: AppOptions): {
             },
           );
         }
+        if (err instanceof KeyServiceUnavailable)
+          return fail(503, "key_service_unavailable", "key service unavailable");
         if (err instanceof SessionIdTaken) return fail(409, "id_taken", err.message);
         if (err instanceof SessionNotActive) return fail(409, "session_not_active", err.message);
-        console.error("remote-tab server error", err);
+        console.error("remote-tab server error");
         return fail(500, "invalid", "internal error");
       }
     },

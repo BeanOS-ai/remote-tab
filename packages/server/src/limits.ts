@@ -1,7 +1,6 @@
 import { isIP } from "node:net";
 
 export interface ThrottleLimits {
-  createPerMinute: number;
   activePerIp: number;
   activeMax: number;
   blobBudgetBytes: number;
@@ -9,7 +8,6 @@ export interface ThrottleLimits {
 }
 
 export const DEFAULT_THROTTLES: Readonly<ThrottleLimits> = {
-  createPerMinute: 10,
   activePerIp: 20,
   activeMax: 500,
   blobBudgetBytes: 64 * 1024 * 1024,
@@ -18,7 +16,6 @@ export const DEFAULT_THROTTLES: Readonly<ThrottleLimits> = {
 
 export function parseThrottleEnv(env: Record<string, string | undefined>): ThrottleLimits {
   const names: Record<keyof ThrottleLimits, string> = {
-    createPerMinute: "REMOTE_TAB_CREATE_PER_MINUTE",
     activePerIp: "REMOTE_TAB_ACTIVE_PER_IP",
     activeMax: "REMOTE_TAB_ACTIVE_MAX",
     blobBudgetBytes: "REMOTE_TAB_BLOB_BUDGET_BYTES",
@@ -54,27 +51,39 @@ function normalizeIp(value: string): string | null {
   return null;
 }
 
-export function clientIp(req: Request, peer: string | undefined, trustProxy: boolean): string {
+/** Explicit hop count wins over the legacy replace-header mode; zero trusts only the socket. */
+export function clientIp(
+  req: Request,
+  peer: string | undefined,
+  trustProxy: boolean,
+  trustedHops?: number,
+): string {
+  const socket = (peer && normalizeIp(peer)) || "unknown";
+  if (trustedHops !== undefined) {
+    if (!Number.isSafeInteger(trustedHops) || trustedHops < 0 || trustedHops === 0) return socket;
+    // A missing/invalid socket cannot establish the end of a trusted proxy chain.
+    if (socket === "unknown") return socket;
+    const forwarded = req.headers.get("x-forwarded-for");
+    if (!forwarded) return socket;
+    const chain = forwarded.split(",").map((part) => normalizeIp(part.trim()));
+    if (chain.some((ip) => ip === null)) return socket;
+    chain.push(socket);
+    const index = chain.length - 1 - trustedHops;
+    return index >= 0 ? (chain[index] ?? socket) : socket;
+  }
   if (trustProxy) {
     const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
     const ip = forwarded && normalizeIp(forwarded);
     if (ip) return ip;
   }
-  return (peer && normalizeIp(peer)) || "unknown";
+  return socket;
 }
 
-/** Fixed 60-second windows per IP, local to this app instance. */
-export class CreateRateLimiter {
-  private readonly windows = new Map<string, { count: number; resetAt: number }>();
-
-  take(ip: string, nowMs: number, max: number): number | null {
-    for (const [key, window] of this.windows) {
-      if (window.resetAt <= nowMs) this.windows.delete(key);
-    }
-    const window = this.windows.get(ip) ?? { count: 0, resetAt: nowMs + 60_000 };
-    this.windows.set(ip, window);
-    if (window.count >= max) return Math.max(1, Math.ceil((window.resetAt - nowMs) / 1000));
-    window.count++;
-    return null;
-  }
+export function parseTrustedProxyHops(env: Record<string, string | undefined>): number | undefined {
+  const raw = env.REMOTE_TAB_TRUST_PROXY_HOPS;
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new Error("REMOTE_TAB_TRUST_PROXY_HOPS must be a nonnegative safe integer");
+  return value;
 }

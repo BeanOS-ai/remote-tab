@@ -6,12 +6,17 @@ import { fileURLToPath } from "node:url";
 import { AgentSession, type LedgerEntry, PRIVATE_DELIVERY_WARNING } from "@remote-tab/client";
 import { verifyChain } from "@remote-tab/protocol/src/crypto";
 import { MemoryStore, createApp } from "@remote-tab/server";
+import { StaticKeyResolver } from "../../packages/server/src/key-resolver";
 import { FakeTab, HELLO, PNG, until } from "./fake-tab";
 
 test("CLI and a driven fake tab complete the human share workflow and export a verified ledger", async () => {
   const root = await mkdtemp(join(tmpdir(), "remote-tab-e2e-"));
   const state = join(root, "state.json");
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["e2e", "test-key"]]) });
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["e2e", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   const listener = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,

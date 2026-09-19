@@ -44,27 +44,73 @@ of the server (domains, cloud projects, secrets) lives outside this repo.
 
 ## Server and agent bootstrap
 
-Run `bun install`, then `bun run build`; deploy the self-contained
-`dist/main.js` with Bun. Creation is open when `REMOTE_TAB_API_KEYS` is unset
-or empty; no platform key is needed, and supplied bearers are accepted. To
-require keys, configure `REMOTE_TAB_API_KEYS=platform:key[,platform:key]`.
-Startup logs the active mode. BeanOS uses open creation with throttling.
+Run `bun install`, then `bun run build`; deploy `dist/main.js` with Bun.
+The API is key-optional: anonymous calls default to 10 requests/second/IP.
+Present a platform key with `Authorization: Bearer <key>` on creation or
+bootstrap requests for the operator's resolved QPS. Session requests keep
+agent/browser bearer tokens; they inherit the creator's key identity without
+resending its platform key. Set anonymous QPS to 0 to require keys. A supplied
+invalid key is always refused, never silently treated as anonymous.
 
-Both modes default to 10 creates/minute/IP (`REMOTE_TAB_CREATE_PER_MINUTE`,
-per instance), 20 concurrent sessions/IP (`REMOTE_TAB_ACTIVE_PER_IP`), 500
-concurrent sessions globally (`REMOTE_TAB_ACTIVE_MAX`), 64 MiB total blob
-bytes/session (`REMOTE_TAB_BLOB_BUDGET_BYTES`), and 5000 messages/session
-(`REMOTE_TAB_MESSAGES_MAX`). Configure positive integers. Exceeding a limit
-returns 429 `rate_limited` with `Retry-After`. GCS makes the concurrent and
-per-session caps shared across instances. The socket peer identifies clients
-unless `REMOTE_TAB_TRUST_PROXY=1` explicitly trusts the first
-`X-Forwarded-For` IP; enable only behind a proxy that replaces untrusted values.
-See design §10 for counting, expiry, and failure semantics.
+Operators can use static keys or an external key service. Static entries are
+`platform:key[:qps]` (default 10 QPS, subject `platform`, tier `static`). If a
+legacy key contains colons and ends with a number, append an explicit QPS to
+preserve that key: `platform:key:123:10` keeps raw key `key:123`. HTTP resolution
+sends only SHA-256 of the key to `<base>/resolve?key=<hash>` with the service
+bearer token and expects `{tier,qps,subject}` or HTTP 404. Other service errors
+fail closed with 503 for keyed traffic; anonymous traffic is unaffected.
+Claims cache for 300 seconds (misses: 60), so revocation takes effect after
+cached approval expires. A session's subject cannot change on refresh.
 
-The default store
-is in-memory for development; GCS uses `REMOTE_TAB_STORE=gcs` and
-`REMOTE_TAB_GCS_BUCKET`. Deployment values and credentials belong outside
-this repository.
+Keys and tiers come from whoever operates the server. BeanOS runs its key
+service outside this repository; distributions replace this
+[key-service placeholder](https://key-service.example) with their own link.
+No email, billing, key issuance, or tier product rules are implemented here.
+
+| Environment variable | Default / meaning |
+|---|---|
+| `REMOTE_TAB_ANONYMOUS_QPS` | `10`; `0` requires keys |
+| `REMOTE_TAB_API_KEYS` | Empty; comma-separated `platform:key[:qps]` |
+| `REMOTE_TAB_KEY_SERVICE_URL` | Unset; HTTP resolver base URL takes precedence over static keys |
+| `REMOTE_TAB_KEY_SERVICE_TOKEN` | Required for HTTP resolver or usage sink; bearer service credential |
+| `REMOTE_TAB_KEY_CACHE_SECONDS` | `300`; `0` disables positive caching; maximum `86400` |
+| `REMOTE_TAB_USAGE_URL` | Unset: JSON log sink; otherwise full usage POST endpoint |
+| `REMOTE_TAB_TRUST_PROXY_HOPS` | Unset; number of trusted hops to skip from the right, including socket peer; `0` uses socket only |
+| `REMOTE_TAB_TRUST_PROXY` | Unset; legacy `1` trusts first X-Forwarded-For only behind a proxy that replaces it |
+| `REMOTE_TAB_ACTIVE_PER_IP` | `20` concurrent sessions |
+| `REMOTE_TAB_ACTIVE_MAX` | `500` concurrent sessions globally |
+| `REMOTE_TAB_BLOB_BUDGET_BYTES` | `67108864` uploaded bytes/session |
+| `REMOTE_TAB_MESSAGES_MAX` | `5000` messages/session |
+| `REMOTE_TAB_STORE` | `memory`; `gcs` uses the current GCS adapter |
+| `REMOTE_TAB_GCS_BUCKET` | Required for `gcs` |
+| `PORT` | `8080` |
+
+QPS values are nonnegative integers; keyed QPS 0 is unlimited. The pinned
+`rate-limiter-flexible` memory backend counts every API call, including
+long-poll and bootstrap calls, in one-second subject/IP windows. Several keys
+for one subject share its counter. Limits are per instance; a shared backend
+can be substituted through the same library. Quota changes retain the current
+counter. Exceeding a limit returns 429 `rate_limited` with `Retry-After`;
+clients wait only within their operation deadline and cancellation signal.
+This replaces `REMOTE_TAB_CREATE_PER_MINUTE`. Lifetime message/blob and active
+session caps remain; reads and Stop remain possible at lifetime caps, subject
+to request limits and key validity.
+
+Usage consists only of subject or IP, opaque tier, kind, amount, and timestamp.
+The default sink aggregates by minute/identity/tier/kind and logs JSON. The HTTP
+sink sends bounded bare JSON arrays (at most 100 events/32 KiB) asynchronously
+with the service bearer, without retrying ambiguous POST failures. Queues and
+transport timeouts are bounded; reporting failures never fail API requests.
+HTTP key/usage service URLs require HTTPS, with HTTP allowed for loopback tests.
+
+Use the socket IP by default. For an appending trusted proxy chain, configure
+`REMOTE_TAB_TRUST_PROXY_HOPS`; e.g. 2 selects the second address from the right
+in X-Forwarded-For after treating the socket as the final trusted hop. Restrict
+ingress to that exact chain. Invalid/short chains fall back to the socket.
+The legacy first-value mode is unsuitable for proxies that retain a caller's
+forwarded prefix. GCS currently shares active-session and resource caps across
+instances; memory stores are local. Deployment credentials and values belong
+outside this repository.
 
 `GET /docs` serves generated agent quick-start markdown. `GET /client-code`
 lists versioned, SHA-256-indexed protocol/client/CLI source files present in
@@ -87,7 +133,7 @@ import { createSession } from "@remote-tab/client";
 
 const { code, session } = await createSession({
   serverUrl: process.env.REMOTE_TAB_SERVER_URL!,
-  apiKey: process.env.REMOTE_TAB_API_KEY!,
+  apiKey: process.env.REMOTE_TAB_API_KEY, // optional
   ttl: 1800, // seconds
 });
 // Deliver code privately to the intended human; it contains the session secret.
@@ -115,7 +161,7 @@ mode/scope checks, redaction, or the consent UI; the installed extension impleme
 
 After installing the workspace dependencies, launch the stdio server with
 `bun packages/mcp/src/main.ts` (the package binary is `remote-tab-mcp`). Set
-`REMOTE_TAB_SERVER_URL` and `REMOTE_TAB_API_KEY` in the process environment.
+`REMOTE_TAB_SERVER_URL` in the process environment; `REMOTE_TAB_API_KEY` is optional.
 Configure the same command and environment in your MCP host. Standard output
 is reserved for MCP messages.
 

@@ -115,55 +115,125 @@ export async function request(
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   if (init.signal?.aborted) throw new RemoteTabError("aborted", "Operation aborted");
+  const deadline = performance.now() + timeoutMs;
+  let stopped: RemoteTabError | undefined;
+  // Snapshot reusable bodies once. Stream and multipart requests get one attempt only.
+  let body = init.body;
+  const replayable =
+    body == null ||
+    typeof body === "string" ||
+    body instanceof Blob ||
+    body instanceof URLSearchParams ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body);
+  if (body instanceof ArrayBuffer) body = body.slice(0);
+  else if (ArrayBuffer.isView(body))
+    body = new Uint8Array(new Uint8Array(body.buffer, body.byteOffset, body.byteLength));
+  else if (body instanceof URLSearchParams) body = new URLSearchParams(body);
+  const headers = new Headers(init.headers);
+  if (token && !headers.has("authorization")) headers.set("authorization", `Bearer ${token}`);
+  const interrupted = new Promise<never>((_, reject) => {
+    const stop = (error: RemoteTabError) => {
+      stopped = error;
+      reject(error);
+      controller.abort();
+    };
+    onAbort = () => stop(new RemoteTabError("aborted", "Operation aborted"));
+    init.signal?.addEventListener("abort", onAbort, { once: true });
+    timer = setTimeout(
+      () => stop(new RemoteTabError("timeout", "HTTP request timed out")),
+      timeoutMs,
+    );
+  });
   try {
-    const response = await Promise.race([
+    return await Promise.race([
       (async () => {
-        const response = await fetcher(
-          new Request(url, {
-            ...init,
-            redirect: "error",
-            headers: {
-              ...(token ? { authorization: `Bearer ${token}` } : {}),
-              ...(init.headers ?? {}),
-            },
-            signal: controller.signal,
-          }),
-        );
-        const bytes =
-          maxResponseBytes === undefined
-            ? await response.arrayBuffer()
-            : await limitedBody(response, maxResponseBytes, controller.signal);
-        return new Response(bytes.byteLength ? bytes : null, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        });
+        while (true) {
+          if (stopped) throw stopped;
+          if (performance.now() >= deadline)
+            throw new RemoteTabError("timeout", "HTTP request timed out");
+          const response = await fetcher(
+            new Request(url, {
+              ...init,
+              body,
+              redirect: "error",
+              headers,
+              signal: controller.signal,
+            }),
+          );
+          // Error envelopes have their own small allowance, independent of a blob's budget.
+          const responseLimit = response.ok ? maxResponseBytes : 8 * 1024;
+          const bytes =
+            responseLimit === undefined
+              ? await response.arrayBuffer()
+              : await limitedBody(response, responseLimit, controller.signal);
+          if (stopped) throw stopped;
+          if (performance.now() >= deadline)
+            throw new RemoteTabError("timeout", "HTTP request timed out");
+          const buffered = new Response(bytes.byteLength ? bytes : null, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers,
+          });
+          if (buffered.ok) return buffered;
+          const error = await buffered.json().catch(() => ({}));
+          const delay = retryAfter(response.headers.get("retry-after"));
+          if (
+            response.status === 429 &&
+            error?.error === "rate_limited" &&
+            delay !== null &&
+            replayable &&
+            delay < deadline - performance.now()
+          ) {
+            await new Promise<void>((resolve, reject) => {
+              const abort = () => {
+                clearTimeout(wait);
+                reject(stopped ?? new RemoteTabError("aborted", "Operation aborted"));
+              };
+              // Even Retry-After: 0 yields to cancellation and the overall timer.
+              const wait = setTimeout(
+                () => {
+                  controller.signal.removeEventListener("abort", abort);
+                  resolve();
+                },
+                Math.max(1, delay),
+              );
+              controller.signal.addEventListener("abort", abort, { once: true });
+              if (controller.signal.aborted) abort();
+            });
+            continue;
+          }
+          throw new RemoteTabError(
+            error?.error ?? "invalid",
+            error?.message ?? `HTTP ${response.status}`,
+            response.status,
+          );
+        }
       })(),
-      new Promise<never>((_, reject) => {
-        onAbort = () => {
-          controller.abort();
-          reject(new RemoteTabError("aborted", "Operation aborted"));
-        };
-        init.signal?.addEventListener("abort", onAbort, { once: true });
-        timer = setTimeout(() => {
-          controller.abort();
-          reject(new RemoteTabError("timeout", "HTTP request timed out"));
-        }, timeoutMs);
-      }),
+      interrupted,
     ]);
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({}));
-      throw new RemoteTabError(
-        body.error ?? "invalid",
-        body.message ?? `HTTP ${response.status}`,
-        response.status,
-      );
-    }
-    return response;
   } finally {
     clearTimeout(timer);
     if (onAbort) init.signal?.removeEventListener("abort", onAbort);
   }
+}
+function retryAfter(value: string | null): number | null {
+  if (value === null) return null;
+  const header = value.trim();
+  if (/^\d+$/.test(header)) {
+    const ms = Number(header) * 1000;
+    return Number.isSafeInteger(ms) ? ms : null;
+  }
+  if (
+    !/^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(
+      header,
+    )
+  )
+    return null;
+  const date = Date.parse(header);
+  return Number.isFinite(date) && new Date(date).toUTCString() === header
+    ? Math.max(0, date - Date.now())
+    : null;
 }
 export const jsonPost = (body: unknown): RequestInit => ({
   method: "POST",

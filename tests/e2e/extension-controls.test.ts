@@ -3,6 +3,7 @@ import { type Fetch, createSession } from "@remote-tab/client";
 import { MemoryStore, createApp } from "@remote-tab/server";
 import { TabDriver } from "../../packages/extension/src/driver";
 import { SharedSession } from "../../packages/extension/src/session";
+import { StaticKeyResolver } from "../../packages/server/src/key-resolver";
 import { PNG, until } from "./fake-tab";
 
 const serverUrl = "http://controls.test";
@@ -23,7 +24,11 @@ function gate() {
 
 /** Only Chrome commands are doubled; consent, control loop and encrypted transport are real. */
 async function fixture() {
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["controls", "test-key"]]) });
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["controls", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   const fetch: Fetch = (request) => app.fetch(request);
   const created = await createSession({ serverUrl, apiKey: "test-key", fetch, ...quick });
   const calls: { method: string; params: Record<string, unknown> }[] = [];

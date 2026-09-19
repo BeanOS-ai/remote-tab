@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { SessionStatus, WireMessage } from "@remote-tab/protocol";
 import { deriveSessionKey, messageAad, seal } from "@remote-tab/protocol/src/crypto";
 import { createApp } from "../../server/src/app";
+import { StaticKeyResolver } from "../../server/src/key-resolver";
 import { MemoryStore } from "../../server/src/memory-store";
 import { AgentSession, BrowserPeer, type Fetch, createSession } from "./index";
 
@@ -9,7 +10,11 @@ type Filter = (request: Request, response: Response) => Promise<Response>;
 const hello = { mode: "act" as const, scope: null, title: "Fake tab" };
 
 async function peers() {
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["test", "test-key"]]) });
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["test", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   let filter: Filter = async (_request, response) => response;
   const fetch: Fetch = async (request) => filter(request, await app.fetch(request));
   const options = {
