@@ -161,9 +161,9 @@ the server is an API, not a web application.
 
 All bodies are JSON unless noted. Authorization is a bearer token: the
 optional platform API key for create, `agent_token` or `browser_token` afterwards.
-With `REMOTE_TAB_API_KEYS` unset or empty, creation is open, including requests
-carrying a bearer. When configured, a matching platform key is required. Both
-modes enforce the throttles in §10.
+The next server revision uses §5.6: anonymous creation is allowed unless
+`REMOTE_TAB_ANONYMOUS_QPS=0`; a supplied platform key must resolve successfully
+and never falls back to anonymous access. Both modes retain the backstops in §10.
 The additional agent bootstrap routes are specified in §5.7; the server
 serves no pages (§5.5).
 
@@ -245,30 +245,70 @@ issuance, or tier-specific product logic belongs here.
 - `KeyResolver.resolve(key)` returns `{tier: string, qps: number, subject: string}`
   or `null`. `StaticKeyResolver` reads comma-separated
   `REMOTE_TAB_API_KEYS=platform:key[:qps]` entries, including the existing
-  two-field form. `HttpKeyResolver` uses `REMOTE_TAB_KEY_SERVICE_URL` and
+  two-field form (default QPS 10, tier `static`, subject equal to platform).
+  An optional final numeric field is the QPS suffix; platform and key must be
+  nonempty. The two-field form is unchanged. For a legacy key containing
+  colons and ending in a numeric field, append an explicit QPS suffix to
+  preserve the full old key (old `platform:key:123` becomes
+  `platform:key:123:10`). Do not silently accept both credential
+  interpretations. `qps` is a nonnegative safe integer; 0 means unlimited.
+  `HttpKeyResolver` takes precedence when its URL is configured and uses `REMOTE_TAB_KEY_SERVICE_URL` and
   `REMOTE_TAB_KEY_SERVICE_TOKEN`: authenticated `GET <url>/resolve?key=<sha256>`
   with a bearer service token. The query contains lowercase hex SHA-256 of
   the presented key, never the raw key. Positive cache TTL is
   `REMOTE_TAB_KEY_CACHE_SECONDS` (default 300 seconds); negative results cache
   for 60 seconds. Key-service failures fail closed for keyed requests;
-  anonymous requests do not contact or depend on that service.
+  anonymous requests do not contact or depend on that service. A miss returns
+  401; transport errors, invalid claims, and service failures return 503
+  `key_service_unavailable`, without using stale cached claims. Cache keys are
+  hashes, never raw keys. Positive TTL 0 disables positive caching.
+- Preserve the existing bearer-token roles. Creation accepts the platform key;
+  the server stores only its SHA-256 fingerprint and immutable resolved subject
+  on that session. Later session calls still authenticate with agent/browser
+  tokens, then inherit the creator's rate and usage identity. Internal
+  fingerprint resolution refreshes tier/QPS through the same caches and HTTP
+  endpoint without storing the raw key; a changed subject or revoked key is
+  refused. `resolve(key)` remains the public raw-key interface, while the two
+  implementations also expose an internal `resolveHash(fingerprint)` path.
+  Tokenless redeem inherits the located session's creator policy, so keyed
+  sessions still pair when anonymous QPS is 0. This does not prove secret
+  possession (§4): id-only redeem denial of service remains possible. Unknown
+  sessions and invalid role tokens receive the caller-IP limit before failure.
+  When anonymous QPS is 0, rejected unauthenticated calls use a separate
+  10-QPS caller-IP abuse guard; this only throttles denial responses and never
+  grants anonymous access. Missing platform keys return 401 in that mode.
+  Anonymous sessions use the current caller IP on every request. No platform
+  key enters the code, browser, exported agent session state, or ledger.
 - Anonymous calls use per-client-IP QPS from `REMOTE_TAB_ANONYMOUS_QPS`
   (default 10; 0 requires keys). Keyed calls use the resolved QPS; 0 means
   unlimited. All API calls count, including each long-poll request once.
+  This includes bootstrap/docs/source requests; on a key-required deployment
+  those requests need a platform bearer too. Clients, CLI, and MCP omit the
+  platform Authorization header when no key is configured, never use a sentinel,
+  and retain their existing role-token headers afterwards.
   Exceeding a limit returns 429, JSON `error: "rate_limited"`, and integer
   `Retry-After` seconds. Existing active-session caps, message counts, and blob
   budgets remain as independent backstops.
-- Use a pinned `rate-limiter-flexible` runtime dependency and its
+- Use `rate-limiter-flexible` pinned to `11.2.1` as the only new server runtime dependency and its
   `RateLimiterMemory`, with `points = qps`, `duration = 1` second, keyed by
-  resolved subject or client IP. This is a one-second window allowance, with
-  no custom bucket implementation. Limits are per server instance; multiple
+  resolved subject or client IP (separate namespaces). Unlimited keyed QPS
+  bypasses the limiter; anonymous QPS 0 instead requires a key. Reject
+  fractional/negative/nonfinite QPS rather than silently rounding. This is a
+  one-second window allowance, with
+  no custom bucket implementation. Multiple keys resolving to the same
+  subject share one counter. Cache refreshes and tier/QPS changes retain the
+  current window consumption rather than creating a bucket per tier or QPS.
+  Limits are per server instance; multiple
   instances multiply the allowance. The same library can use a shared
   Redis/Postgres backend if global rate limits become necessary.
 - `UsageSink` accepts `{subject | ip, tier, kind, amount, at}` events; `kind`
   is `session_created`, `message`, `blob_bytes`, or `throttled`. Subjects and
   IPs are separate identity types. Default `LogUsageSink` aggregates amounts
   by identity, tier, and kind per minute, then writes one structured JSON
-  line per aggregate. Optional `HttpUsageSink` uses `REMOTE_TAB_USAGE_URL`
+  line per aggregate. Amounts count successful session creations (1), appended
+  messages (1), accepted uploaded ciphertext bytes, and quota rejections (1);
+  reads are rate-limited but do not count as additional messages/blob bytes.
+  Optional `HttpUsageSink` uses `REMOTE_TAB_USAGE_URL`
   and the same service token to POST event batches. Reporting is best effort,
   bounded, and never blocks or changes an API response; no raw keys, tokens,
   secrets, URLs, or message contents enter usage events.
@@ -299,7 +339,8 @@ issuance, or tier-specific product logic belongs here.
   (protocol, client, and CLI are implemented in M2). No server source, dependencies,
   node_modules, filesystem lookup at request time, or arbitrary paths.
   All entrypoints build the assets before bundling; source changes are
-  included on the next build. Unknown paths and non-GET methods return 404.
+  included on the next build. After authentication and request limiting,
+  unknown paths and non-GET methods return 404.
 - Agents download the index, validate version and hashes against independent
   published packages when possible, save each allowlisted file under its
   path, and run the source with Bun. Until npm publication the hashes only
@@ -512,26 +553,36 @@ exceeds its limits.
 | Long-poll wait | 25 s | 25 s |
 | Snapshot size | 200 KiB | fixed; agent narrows with `ref` |
 | Object retention after expiry | 24 h | fixed |
-| Creates per client IP per minute | 10 | `REMOTE_TAB_CREATE_PER_MINUTE` |
+| Anonymous API requests per client IP per second | 10 | `REMOTE_TAB_ANONYMOUS_QPS`; 0 requires keys |
+| Keyed API requests per subject per second | resolved QPS | 0 unlimited; per instance (§5.6) |
 | Concurrent sessions per client IP | 20 | `REMOTE_TAB_ACTIVE_PER_IP` |
 | Concurrent sessions globally | 500 | `REMOTE_TAB_ACTIVE_MAX` |
 | Cumulative blob bytes per session | 64 MiB | `REMOTE_TAB_BLOB_BUDGET_BYTES` |
 | Messages per session (both roles combined) | 5000 | `REMOTE_TAB_MESSAGES_MAX` |
 
-All throttles apply in open and keyed mode and accept positive integer env
-values. Exceeding one returns HTTP 429, JSON `error: "rate_limited"`, and
+Active-session and per-session backstops apply in anonymous and keyed mode
+and accept positive integer env values. QPS configuration follows §5.6.
+Exceeding one returns HTTP 429, JSON `error: "rate_limited"`, and
 `Retry-After` seconds. Session blob/message budgets are lifetime totals; they
-do not replenish by waiting. Reads and stop remain available at the cap.
+do not replenish by waiting. Reads and stop remain available at the lifetime
+blob/message cap, subject to QPS and current key authorization.
 
 Client identity defaults to the socket peer (last hop). Set
 `REMOTE_TAB_TRUST_PROXY=1` only behind a trusted proxy that replaces untrusted
 `X-Forwarded-For`; then the first IP in that header identifies the client.
+For proxies that append rather than replace that header, configure
+`REMOTE_TAB_TRUST_PROXY_HOPS` to select from the right of the chain consisting
+of the forwarded addresses followed by the socket peer: skip exactly that
+many trusted hops. It takes precedence over the legacy flag. Restrict ingress
+to that trusted chain; the application does not authenticate proxy hops.
+Invalid/short chains fall back to the socket peer. This avoids trusting an
+attacker-controlled first entry behind an appending load balancer.
 Invalid/missing forwarded IPs fall back to the socket peer. IPv6 forms are
 canonicalized and IPv4-mapped peers share the IPv4 quota. Without peer
 information, requests share one `unknown` quota.
 
-The create rate uses fixed 60-second windows **per instance**, so multiple
-Cloud Run instances multiply that allowance. GCS-backed active caps are shared
+The one-second request limits are **per instance** (§5.6), replacing
+`REMOTE_TAB_CREATE_PER_MINUTE`. GCS-backed active caps are shared
 across instances through a generation-matched admission index; unredeemed
 `created` sessions count too, until stop or expiry. Memory storage is local
 only. Blob-byte reservations and message sequence counts are on the session
@@ -659,12 +710,15 @@ own secret store.
 
 1. ~~License.~~ **Decided: MIT** (Gilad, 2026-09-18). `LICENSE` is in the repo
    from the first commit so nothing has to be relicensed at open-source time.
-2. **Decided: optional platform API keys** (Gilad, 2026-09-18): “For the real
-   BeanOS deployment we shall set reasonable throttling without API key.”
-   BeanOS runs open + throttled. Operators may require static keys through
-   `REMOTE_TAB_API_KEYS` as `platform:key` pairs, rotated by replacement.
-   Short-lived broker-minted platform keys are deferred.
+2. **Decided: optional API keys with an external key-service contract**
+   (Gilad, 2026-09-18): open source API optional; BeanOS runs the key service
+   and tiers outside this repo. §5.6 defines static/HTTP resolvers, per-subject
+   or per-IP QPS, and best-effort usage sinks. The only new server runtime
+   dependency is pinned `rate-limiter-flexible` with its memory backend;
+   shared backends remain an option. No emails, billing, tier product logic,
+   or BeanOS deployment values enter this repo. Anonymous defaults to 10 QPS;
+   setting 0 requires keys. The client and CLI/MCP support omitted platform keys.
 3. **Settled for v1: GCS-only session state**, with generation-matched cursor
-   publication (§5.3) and shared admission accounting. Only the create-rate
-   window is per instance. The memory store is for tests and local development.
+   publication (§5.3) and shared admission accounting. Request QPS
+   limits are per instance. The memory store is for tests and local development.
 4. **Open (Gilad):** store-facing extension name at open-source time.
