@@ -1,7 +1,7 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-18
-last_reviewed: 2026-09-18
+last_updated: 2026-09-19
+last_reviewed: 2026-09-19
 ---
 
 # remote-tab
@@ -34,8 +34,9 @@ id; the secret never goes to the server. Old three-part codes are rejected.
 
 Status: M1–M3 implemented: protocol, server, shared agent/browser client,
 MCP, CLI, and the Chrome extension with human controls, privacy enforcement,
-verified ledger export, and store packaging. BeanOS cutover (M4) and public
-release (M5) remain. Read [`docs/design.md`](docs/design.md). License: MIT.
+verified ledger export, and store packaging. The optional key-service contract,
+per-subject/IP QPS limits, usage sinks, and Firestore/GCS adapter are also implemented.
+Distribution cutover and human acceptance (M4), then public release (M5), remain. Read [`docs/design.md`](docs/design.md). License: MIT.
 
 This repository is private while the first version is built and will be
 open-sourced afterwards. It contains the product only: extension, server,
@@ -267,8 +268,30 @@ verified ledger export. It does not require Chrome or external services.
 The installed extension adds tab consent and binding, actual browser actions,
 mode/scope enforcement, redaction, human-pause controls, and the local ledger
 viewer with GIF rendering. Extension tests run its real driver loop against
-fake CDP; optional Chromium smoke scripts cover browser behavior, UI, media,
-and the packaged extension. See [verification instructions](packages/extension/README.md).
+fake CDP. The separate `bun run test:browser` suite loads the built Manifest V3
+extension in real Chromium and exercises its protocol and human controls with
+local offline fixtures. Its CI job may skip only when Chromium cannot launch;
+assertion failures fail the job. Existing focused Chromium smoke scripts remain
+available; see [verification instructions](packages/extension/README.md).
+
+```sh
+bun tests/browser/node_modules/playwright/cli.js install --with-deps chromium
+bun run test:browser
+```
+
+`CHROMIUM_EXECUTABLE` can select an installed Chromium. Environments whose
+network broker prevents loopback HTTP can explicitly use
+`BROWSER_INPROCESS_HTTP=1`; this routes local requests to the same in-process
+server while retaining the actual installed extension and CDP APIs. CI uses
+normal localhost HTTP. This option does not relax assertions or bypass proxies.
+
+Before distribution acceptance, run the mandatory
+[30-minute manual test plan](docs/manual-test-plan.md) and fill in its results table.
+Automated coverage does not establish real-site MFA behavior, production ingress,
+store provisioning, or Chrome Web Store approval. No public or store release is
+performed by these tests. Live CLI/MCP human-pause status and distribution-owned
+legacy migration remain M4 follow-ups; public packaging, licensing/security review,
+and publication remain M5 responsibilities.
 
 ## Self-hosting and extension distribution
 

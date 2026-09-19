@@ -80,7 +80,6 @@ its one-release 1.1.2 compatibility shim in its distribution during M4 because
 that path requires additional deployment-owned GCS/paste-bin hosts. Remove the
 shim in 2.1; those hosts never enter this generic build.
 
-
 Verification: `bun test packages/extension tests/e2e/extension*.test.ts` exercises
 fake-CDP enforcement and the real encrypted driver loop. With Playwright and
 Chromium installed, run `bun scripts/extension-driver-smoke.mjs` for real CDP
@@ -90,3 +89,11 @@ extension/server loop. `bun scripts/ledger-media-smoke.mjs` checks real GIF deco
 `bun scripts/store-package-smoke.mjs` loads the unpacked store ZIP in Chromium.
 The scripts accept `PLAYWRIGHT_MODULE` and
 `CHROMIUM_EXECUTABLE` to select locally installed tooling.
+
+The pinned acceptance suite is `bun run test:browser` from the repository root.
+It loads the built extension in a persistent Chromium profile and drives the real
+AgentSession protocol against local offline fixtures. CI runs it as the separate
+`browser` job; only unavailable Chromium permits a reported skip. Use the
+[30-minute manual test plan](../../docs/manual-test-plan.md) for real-site MFA,
+Chrome UI, expiry, updates, and distribution acceptance, and record its results
+before release. A passing automated suite does not replace that human check.

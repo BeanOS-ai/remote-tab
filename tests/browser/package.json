@@ -1,0 +1,9 @@
+{
+  "name": "@remote-tab/browser-tests",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "devDependencies": {
+    "playwright": "1.59.0"
+  }
+}

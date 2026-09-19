@@ -1,0 +1,21 @@
+name: browser
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - name: Install pinned Playwright Chromium and system dependencies
+        run: bun tests/browser/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Real Chromium MV3 extension tests
+        run: bun run test:browser

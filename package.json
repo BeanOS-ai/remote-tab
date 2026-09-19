@@ -8,7 +8,8 @@
     "test:e2e": "bun run generate && bun test tests/e2e",
     "check": "bun run generate && bunx biome check .",
     "generate": "bun scripts/generate-bootstrap.ts",
-    "build": "bun run generate && bun build packages/server/src/main.ts --target=bun --external @remote-tab/store-gcp --outdir=dist && bun packages/extension/build.ts"
+    "build": "bun run generate && bun build packages/server/src/main.ts --target=bun --external @remote-tab/store-gcp --outdir=dist && bun packages/extension/build.ts",
+    "test:browser": "bun tests/browser/run.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

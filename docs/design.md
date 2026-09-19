@@ -673,6 +673,7 @@ packages/cli        `remote-tab` over client
 packages/server     dead-drop server (Bun), Dockerfile, reference deploy doc
 packages/extension  Chrome extension (MV3), store packaging script
 tests/e2e           fake tab over BrowserPeer, CLI and MCP lifecycle tests
+tests/browser       real Chromium, installed MV3 extension, offline fixtures
 docs/               this design, protocol reference, threat model
 ```
 
@@ -683,9 +684,14 @@ driven by a deterministic fake tab, and the real client through CLI and MCP.
 The M2 harness models snapshots, form actions, PNGs and human handoff. M3 adds
 the actual extension driver against fake CDP, including mode/scope enforcement,
 redaction, handoff, takeover, Stop/expiry races, and verified ledger/media export.
-Optional Chromium smoke scripts exercise actual CDP, installed extension pages,
-privacy pixels, GIF decoding, and the store archive. Transport tests remain
-regression coverage alongside these extension checks.
+A separate browser CI job loads the built MV3 extension in real Chromium and
+drives AgentSession against a local server and offline fixture pages, covering
+actions, privacy, human controls, and ledger verification/export. Only browser
+unavailability permits a reported skip; assertion failures fail the job. Focused
+Chromium smoke scripts also cover privacy pixels, GIF decoding, and the store
+archive. The 30-minute manual plan in `docs/manual-test-plan.md` remains required
+for human acceptance, including real-site MFA and extension updates. Transport
+tests remain regression coverage alongside these checks.
 
 ## 14. Deployment boundary
 
