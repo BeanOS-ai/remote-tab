@@ -7,6 +7,7 @@ import { createMcpServer } from "@remote-tab/mcp";
 import { parseCode } from "@remote-tab/protocol";
 import { deriveSessionId } from "@remote-tab/protocol/src/crypto";
 import { MemoryStore, createApp } from "@remote-tab/server";
+import { StaticKeyResolver } from "../../packages/server/src/key-resolver";
 import { FakeTab, HELLO, PNG, until } from "./fake-tab";
 
 const serverUrl = "http://remote-tab.test";
@@ -20,7 +21,8 @@ async function fixture(options: ClientOptions = {}) {
   let now = Date.now();
   const app = createApp({
     store: new MemoryStore(),
-    apiKeys: new Map([["e2e", "test-key"]]),
+    keyResolver: new StaticKeyResolver(new Map([["e2e", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
     now: () => new Date(now),
   });
   const fetch: Fetch = (request) => app.fetch(request);

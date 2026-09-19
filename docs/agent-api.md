@@ -7,7 +7,7 @@ last_reviewed: 2026-09-18
 ## Agent quick-start and wire examples
 
 You need the server origin. Open deployments (including BeanOS) need no platform
-API key; ask the operator for a key only if creation returns 401. Replace
+API key; ask the operator for a key if anonymous access is disabled (401). Replace
 `$SERVER`, `$ID`, and the angle-bracket placeholders below with your values.
 Keep tokens, the secret, and the code out of logs, public issues, URLs and
 third-party paste sites. Generate the 16-byte secret locally using a CSPRNG;
@@ -44,20 +44,32 @@ bootstrap code can expose browser results and screenshots as well as commands.
 
 ### Authentication, JSON and errors
 
-Create needs no Authorization header on an open deployment. On a keyed
-deployment, use `Authorization: Bearer <platform-api-key>`. All other requests
-except redeem use `Authorization: Bearer <agent-token>` (or browser token
-for browser requests). JSON POST bodies use `Content-Type: application/json`.
-Requests use HTTPS. Examples omit that header for brevity. Response timestamps
-are ISO-8601 UTC. The server cannot validate encrypted contents.
+Create needs no Authorization header on an open deployment. Optional platform
+keys use `Authorization: Bearer <platform-api-key>` on create and bootstrap
+(`/docs`, `/client-code` and source downloads). Agent/browser bearer tokens
+still authorize session routes; the server inherits the creator's key policy,
+not the raw platform key. Tokenless redeem uses that same policy. CLI/MCP keys
+are optional. A supplied invalid key never falls back to anonymous access.
+Keys and tiers come from the server operator; BeanOS operates an external
+[key service](https://key-service.example) (distribution-owned placeholder).
+
+Every API call, including long polls, consumes subject or caller-IP QPS.
+Anonymous defaults to 10 QPS; 0 requires keys. Keyed 0 means unlimited.
+Requests above quota return 429 `rate_limited` and `Retry-After`; the client
+honors explicit rejections within its existing deadline, never retries
+ambiguous writes. Key-service failure returns 503 `key_service_unavailable`
+for keyed calls; anonymous access is unaffected. JSON POST bodies use
+`Content-Type: application/json`. Requests use HTTPS; timestamps are ISO UTC.
 
 Errors are JSON `{ "error": "<code>", "message": "<detail>" }`: 400 invalid
 input, 401 missing/wrong credentials, 404 unknown path/session/blob, 409
 `id_taken`, inactive session, already redeemed, TTL cap, or stale chain, 410 redeem
-window closed, 413 too large, 429 `rate_limited` with `Retry-After` seconds.
-Creation rate limits reset; active capacity frees on stop/expiry. Blob and
+window closed, 413 too large, 429 `rate_limited` with `Retry-After` seconds,
+503 key service unavailable. QPS windows reset after one second; active
+capacity frees on stop/expiry. Blob and
 message budgets do not reset within a session: wait alone cannot replenish
-them. Reads and stop remain available. A stale append additionally returns
+them. Reads and stop remain available at lifetime caps, subject to QPS and
+current key authorization. A stale append additionally returns
 `expected_prev_hash`; consume and verify intervening messages, then reseal
 with fresh nonce and the new AAD before retrying. Never reuse old ciphertext
 at a new chain position. Network errors after writes are ambiguous: read

@@ -37,7 +37,7 @@ export interface LedgerOptions extends WaitOptions {
 }
 export interface CreateOptions extends ClientOptions {
   serverUrl: string;
-  apiKey: string;
+  apiKey?: string;
   ttl?: number;
 }
 /** LOCAL PRIVATE STATE: contains complete decryption secret and bearer token. Never publish/log. */

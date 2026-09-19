@@ -123,6 +123,7 @@ for (const [name, makeStores] of [
       const [a, b] = makeStores();
       const apps = [a, b].map((store) =>
         createApp({
+          anonymousQps: 10000,
           store,
           now: () => new Date(record.createdAt),
           limits: { activePerIp: 1, activeMax: 1 },

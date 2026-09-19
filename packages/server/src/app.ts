@@ -127,7 +127,7 @@ export function createApp(opts: AppOptions): {
     binding?: { keyHash: string; subject: string };
     authenticated?: { session: SessionRecord; role: Role | null };
   }
-  function record(ctx: Context, kind: UsageEvent["kind"], amount: number): void {
+  function recordUsage(ctx: Context, kind: UsageEvent["kind"], amount: number): void {
     try {
       // Custom sinks cannot turn a successful operation into a failure either.
       void Promise.resolve(
@@ -227,7 +227,9 @@ export function createApp(opts: AppOptions): {
     const auth = ctx.authenticated;
     if (!auth || auth.session.id !== id || !auth.role || !allowed.includes(auth.role))
       return fail(401, "unauthorized", "token not valid for this session");
-    return { session: auth.session, role: auth.role };
+    // Key-service resolution may outlast the session TTL. Re-evaluate the
+    // captured record at the authorization boundary after that await.
+    return { session: effectiveState(auth.session), role: auth.role };
   }
 
   function status(s: SessionRecord): SessionStatus {
@@ -299,7 +301,7 @@ export function createApp(opts: AppOptions): {
         expires_at: record.expiresAt,
         redeem_until: record.redeemUntil,
       };
-      record(ctx, "session_created", 1);
+      recordUsage(ctx, "session_created", 1);
       return json(201, res);
     }
 
@@ -393,7 +395,7 @@ export function createApp(opts: AppOptions): {
             (seq) => chainHash(id, seq, body.ciphertext),
             limits.messagesMax,
           );
-          record(ctx, "message", 1);
+          recordUsage(ctx, "message", 1);
           return json(201, { seq: stored.seq, hash: stored.hash });
         } catch (err) {
           if (err instanceof SessionNotActive) {
@@ -448,7 +450,7 @@ export function createApp(opts: AppOptions): {
           return fail(413, "too_large", `blob exceeds ${blobMax} bytes`);
         const blobId = b64url(crypto.getRandomValues(new Uint8Array(18)));
         await store.putBlob(id, blobId, bytes, limits.blobBudgetBytes);
-        record(ctx, "blob_bytes", bytes.byteLength);
+        recordUsage(ctx, "blob_bytes", bytes.byteLength);
         return json(201, { blob_id: blobId });
       }
       if (req.method === "GET" && parts.length === 5) {
@@ -533,7 +535,7 @@ export function createApp(opts: AppOptions): {
         return await handle(req, ctx);
       } catch (err) {
         if (err instanceof RateLimited) {
-          record(ctx, "throttled", 1);
+          recordUsage(ctx, "throttled", 1);
           return json(
             429,
             { error: "rate_limited", message: err.message },

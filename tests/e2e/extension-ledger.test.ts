@@ -5,11 +5,16 @@ import { makeLedgerZip, screenshots } from "../../packages/extension/src/archive
 import { TabDriver } from "../../packages/extension/src/driver";
 import { LedgerJobs, loadLedger } from "../../packages/extension/src/ledger-data";
 import { SharedSession } from "../../packages/extension/src/session";
+import { StaticKeyResolver } from "../../packages/server/src/key-resolver";
 import { PNG } from "./fake-tab";
 
 /** Real server, consent/session, crypto and transfer; only Chrome's CDP boundary is doubled. */
 test("stopped extension ledger loads authenticated command/result PNGs and remains exportable after worker release", async () => {
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["ledger", "test-key"]]) });
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["ledger", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   const fetch: Fetch = (request) => app.fetch(request);
   const serverUrl = "http://ledger.test";
   const quick = { timeoutMs: 2000, pollWaitSeconds: 0, pollIntervalMs: 1 };
@@ -162,7 +167,8 @@ for (const terminal of ["stopped", "expired"] as const) {
     let now = Date.now();
     const app = createApp({
       store: new MemoryStore(),
-      apiKeys: new Map([["race", "test-key"]]),
+      keyResolver: new StaticKeyResolver(new Map([["race", "test-key"]]), { defaultQps: 0 }),
+      anonymousQps: 0,
       now: () => new Date(now),
     });
     let armed = false;

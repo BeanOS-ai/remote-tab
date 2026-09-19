@@ -3,6 +3,7 @@ import { type Fetch, type Hello, createSession } from "@remote-tab/client";
 import { MemoryStore, createApp } from "@remote-tab/server";
 import { TabDriver } from "../../packages/extension/src/driver";
 import { SharedSession } from "../../packages/extension/src/session";
+import { StaticKeyResolver } from "../../packages/server/src/key-resolver";
 import { PNG, until } from "./fake-tab";
 
 const serverUrl = "http://remote-tab.test";
@@ -98,7 +99,11 @@ class FakeCdp {
 }
 
 async function fixture(mode: Hello["mode"] = "act") {
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["test", "test-key"]]) });
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["test", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   const fetch: Fetch = (request) => app.fetch(request);
   const agent = await createSession({ serverUrl, apiKey: "test-key", fetch, ...quick });
   const cdp = new FakeCdp();

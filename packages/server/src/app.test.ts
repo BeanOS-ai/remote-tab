@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { LIMITS } from "@remote-tab/protocol";
 import { chainHash } from "@remote-tab/protocol/src/crypto";
 import { createApp, parseApiKeys } from "./app";
+import { StaticKeyResolver } from "./key-resolver";
 import { MemoryStore } from "./memory-store";
 
 const API_KEY = "test-platform-key-0123456789";
@@ -11,7 +12,8 @@ const CT = "Y2lwaGVydGV4dC1ieXRlcy1oZXJl"; // any base64url ≥ 22 chars
 function harness(nowMs?: () => number) {
   const app = createApp({
     store: new MemoryStore(),
-    apiKeys: new Map([["test", API_KEY]]),
+    keyResolver: new StaticKeyResolver(new Map([["test", API_KEY]]), { defaultQps: 0 }),
+    anonymousQps: 0,
     now: nowMs ? () => new Date(nowMs()) : undefined,
     blobMaxBytes: 1024,
   });
@@ -58,7 +60,7 @@ describe("server serves nothing but the API", () => {
   test("root, html-looking paths, and unknown routes are 404 JSON", async () => {
     const { call } = harness();
     for (const p of ["/", "/index.html", "/s/abc", "/l/abc", "/v1", "/v1/other"]) {
-      const res = await call(p);
+      const res = await call(p, {}, API_KEY);
       expect(res.status).toBe(404);
       expect(res.headers.get("content-type")).toContain("application/json");
     }

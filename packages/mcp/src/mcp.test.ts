@@ -10,6 +10,7 @@ import {
   PRIVATE_DELIVERY_WARNING,
 } from "@remote-tab/client";
 import { createApp } from "../../server/src/app";
+import { StaticKeyResolver } from "../../server/src/key-resolver";
 import { MemoryStore } from "../../server/src/memory-store";
 import { createMcpServer } from "./index";
 
@@ -31,12 +32,16 @@ function payload(result: CallToolResult) {
   if (first.type !== "text") throw new Error("Expected JSON text");
   return JSON.parse(first.text);
 }
-async function fixture(wrap?: (fetch: Fetch) => Fetch) {
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["test", apiKey]]) });
+async function fixture(wrap?: (fetch: Fetch) => Fetch, anonymous = false) {
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["test", apiKey]]), { defaultQps: 0 }),
+    anonymousQps: anonymous ? 10 : 0,
+  });
   const fetch: Fetch = (request) => app.fetch(request);
   const server = createMcpServer({
     serverUrl,
-    apiKey,
+    apiKey: anonymous ? undefined : apiKey,
     fetch: wrap ? wrap(fetch) : fetch,
     clientOptions: quick,
   });
@@ -60,6 +65,30 @@ async function fixture(wrap?: (fetch: Fetch) => Fetch) {
 }
 
 describe("MCP tool adapter", () => {
+  test("anonymous create omits the platform header and subsequent calls retain role authorization", async () => {
+    const headers: (string | null)[] = [];
+    const { create, call } = await fixture(
+      (fetch) => (request) => {
+        headers.push(request.headers.get("authorization"));
+        return fetch(request);
+      },
+      true,
+    );
+    const created = await create();
+    expect(Object.keys(created).sort()).toEqual(["code", "warning"]);
+    expect(headers).toEqual([null]);
+    expect(payload(await call("remote_tab_status"))).toMatchObject({ state: "created" });
+    expect(
+      headers
+        .slice(1)
+        .every(
+          (header) =>
+            typeof header === "string" &&
+            header.startsWith("Bearer ") &&
+            header !== `Bearer ${apiKey}`,
+        ),
+    ).toBe(true);
+  });
   test("lists exactly the approved 19 tools, refs schemas and untrusted-content warnings", async () => {
     const { client } = await fixture();
     const { tools } = await client.listTools();
@@ -215,21 +244,25 @@ describe("MCP tool adapter", () => {
   });
 });
 
-test("real stdio entrypoint initializes and lists tools without stdout contamination", async () => {
-  const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [new URL("./main.ts", import.meta.url).pathname],
-    env: { ...process.env, REMOTE_TAB_SERVER_URL: serverUrl, REMOTE_TAB_API_KEY: apiKey } as Record<
-      string,
-      string
-    >,
-    stderr: "pipe",
-  });
-  const client = new Client({ name: "stdio-test", version: "0.0.0" });
-  close.push(() => client.close());
-  await client.connect(transport);
-  expect((await client.listTools()).tools.length).toBe(19);
-});
+test.each([apiKey, ""])(
+  "real stdio entrypoint initializes and lists tools with optional platform key %s",
+  async (platformKey) => {
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [new URL("./main.ts", import.meta.url).pathname],
+      env: {
+        ...process.env,
+        REMOTE_TAB_SERVER_URL: serverUrl,
+        REMOTE_TAB_API_KEY: platformKey,
+      } as Record<string, string>,
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "stdio-test", version: "0.0.0" });
+    close.push(() => client.close());
+    await client.connect(transport);
+    expect((await client.listTools()).tools.length).toBe(19);
+  },
+);
 
 test("stdio entrypoint fails on missing environment with diagnostics only on stderr", async () => {
   const child = Bun.spawn([process.execPath, new URL("./main.ts", import.meta.url).pathname], {

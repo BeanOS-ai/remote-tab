@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { type Fetch, createSession } from "@remote-tab/client";
 import { until } from "../../../tests/e2e/fake-tab";
 import { createApp } from "../../server/src/app";
+import { StaticKeyResolver } from "../../server/src/key-resolver";
 import { MemoryStore } from "../../server/src/memory-store";
 import type { ChromeApi, Sender, Tab } from "./chrome";
 import { loadLedger } from "./ledger-data";
@@ -22,7 +23,11 @@ function deferred() {
 }
 
 async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existingCapture = false) {
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["test", "test-key"]]) });
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["test", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   const directFetch: Fetch = (request) => app.fetch(request);
   const { code, session } = await createSession({
     serverUrl: origin,

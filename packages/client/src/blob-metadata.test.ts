@@ -1,11 +1,16 @@
 import { expect, test } from "bun:test";
 import { deriveSessionKey, messageAad, seal } from "@remote-tab/protocol/src/crypto";
 import { createApp } from "../../server/src/app";
+import { StaticKeyResolver } from "../../server/src/key-resolver";
 import { MemoryStore } from "../../server/src/memory-store";
 import { BrowserPeer, type Fetch, createSession } from "./index";
 
 async function peers() {
-  const app = createApp({ store: new MemoryStore(), apiKeys: new Map([["test", "test-key"]]) });
+  const app = createApp({
+    store: new MemoryStore(),
+    keyResolver: new StaticKeyResolver(new Map([["test", "test-key"]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   let browserToken = "";
   let blobReads = 0;
   const fetch: Fetch = async (request) => {

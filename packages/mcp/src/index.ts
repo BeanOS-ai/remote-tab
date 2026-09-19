@@ -16,7 +16,7 @@ import { z } from "zod";
 
 export interface McpOptions {
   serverUrl: string;
-  apiKey: string;
+  apiKey?: string;
   fetch?: Fetch;
   clientOptions?: Omit<ClientOptions, "fetch">;
 }

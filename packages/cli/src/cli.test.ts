@@ -6,6 +6,7 @@ import { BROWSER_TOOLS, BrowserPeer, PRIVATE_DELIVERY_WARNING } from "@remote-ta
 import type { WireMessage } from "../../protocol/src";
 import { verifyChain } from "../../protocol/src/crypto";
 import { createApp } from "../../server/src/app";
+import { StaticKeyResolver } from "../../server/src/key-resolver";
 import { MemoryStore } from "../../server/src/memory-store";
 import { defaultStatePath, parseArgs } from "./index";
 
@@ -26,7 +27,11 @@ async function cli(args: string[], env: Record<string, string> = {}) {
 }
 function server(corrupt = () => false) {
   const store = new MemoryStore();
-  const app = createApp({ store, apiKeys: new Map([["cli", apiKey]]) });
+  const app = createApp({
+    store,
+    keyResolver: new StaticKeyResolver(new Map([["cli", apiKey]]), { defaultQps: 0 }),
+    anonymousQps: 0,
+  });
   let creates = 0;
   const listener = Bun.serve({
     hostname: "127.0.0.1",

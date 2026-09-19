@@ -1,6 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setSystemTime, test } from "bun:test";
 import type { CreateSessionResponse } from "@remote-tab/protocol";
 import { type AppOptions, createApp } from "./app";
+import { StaticKeyResolver } from "./key-resolver";
 import { DEFAULT_THROTTLES, clientIp, parseThrottleEnv } from "./limits";
 import { MemoryStore } from "./memory-store";
 
@@ -12,7 +13,13 @@ const START = Date.parse("2030-01-01T00:00:00Z");
 function harness(options: Omit<AppOptions, "store" | "now"> = {}) {
   let time = START;
   const store = new MemoryStore();
-  const app = createApp({ ...options, store, now: () => new Date(time) });
+  const app = createApp({
+    anonymousQps: 10000,
+    keyResolver: new StaticKeyResolver(options.apiKeys, { defaultQps: 10000 }),
+    ...options,
+    store,
+    now: () => new Date(time),
+  });
   const call = (
     path: string,
     init: RequestInit = {},
@@ -68,17 +75,17 @@ async function active(h: ReturnType<typeof harness>) {
 
 describe("creation authentication modes", () => {
   for (const apiKeys of [undefined, new Map<string, string>()]) {
-    test(`open mode with ${apiKeys ? "empty" : "omitted"} keys accepts absent and arbitrary bearer`, async () => {
+    test(`open mode with ${apiKeys ? "empty" : "omitted"} keys accepts absent bearer but rejects an unregistered supplied key`, async () => {
       const h = harness({ apiKeys });
       await created(await h.create());
-      await created(await h.create(IP_A, "unregistered-key"));
+      expect((await h.create(IP_A, "unregistered-key")).status).toBe(401);
     });
   }
 
   test("configured keys reject missing and incorrect credentials without consuming quota", async () => {
     const h = harness({
       apiKeys: new Map([["test", API_KEY]]),
-      limits: { createPerMinute: 1 },
+      anonymousQps: 0,
     });
     for (const token of [undefined, "incorrect-key"]) {
       const response = await h.create(IP_A, token);
@@ -94,24 +101,33 @@ for (const mode of ["open", "keyed"] as const) {
     const apiKeys = mode === "keyed" ? new Map([["test", API_KEY]]) : undefined;
     const token = mode === "keyed" ? API_KEY : undefined;
 
-    test("create rate is per IP and recovers exactly at the minute boundary", async () => {
-      const h = harness({ apiKeys, limits: { createPerMinute: 2 } });
-      const burst = await Promise.all([h.create(IP_A, token), h.create(IP_A, token)]);
-      for (const response of burst) await created(response);
-      await limited(await h.create(IP_A, token), 60);
-      await created(await h.create(IP_B, token));
-      h.setTime(START + 59_999);
-      await limited(await h.create(IP_A, token), 1);
-      h.setTime(START + 60_000);
-      await created(await h.create(IP_A, token));
-      await created(await h.create(IP_A, token));
-      await limited(await h.create(IP_A, token), 60);
+    test("QPS recovers at one second and keyed subjects share a quota across IPs", async () => {
+      setSystemTime(new Date(START));
+      try {
+        const h = harness({
+          anonymousQps: 2,
+          keyResolver: new StaticKeyResolver(apiKeys, { defaultQps: 2 }),
+        });
+        const burst = await Promise.all([h.create(IP_A, token), h.create(IP_A, token)]);
+        for (const response of burst) await created(response);
+        await limited(await h.create(IP_A, token), 1);
+        if (mode === "keyed") await limited(await h.create(IP_B, token), 1);
+        else await created(await h.create(IP_B));
+        setSystemTime(new Date(START + 999));
+        await limited(await h.create(IP_A, token), 1);
+        setSystemTime(new Date(START + 1000));
+        await created(await h.create(IP_A, token));
+        await created(await h.create(IP_A, token));
+        await limited(await h.create(IP_A, token), 1);
+      } finally {
+        setSystemTime();
+      }
     });
 
     test("unredeemed sessions consume per-IP capacity until stopped or expired", async () => {
       const h = harness({
         apiKeys,
-        limits: { createPerMinute: 100, activePerIp: 1, activeMax: 10 },
+        limits: { activePerIp: 1, activeMax: 10 },
       });
       const first = await created(await h.create(IP_A, token));
       await limited(await h.create(IP_A, token));
@@ -130,7 +146,7 @@ for (const mode of ["open", "keyed"] as const) {
     test("global capacity spans IPs and admits only one concurrent contender", async () => {
       const h = harness({
         apiKeys,
-        limits: { createPerMinute: 100, activePerIp: 10, activeMax: 1 },
+        limits: { activePerIp: 10, activeMax: 1 },
       });
       const responses = await Promise.all([h.create(IP_A, token), h.create(IP_B, token)]);
       expect(responses.map((r) => r.status).sort()).toEqual([201, 429]);
@@ -222,14 +238,14 @@ describe("session resource budgets", () => {
 
 describe("client IP trust and normalization", () => {
   test("changing forwarded headers cannot evade the default socket IP rate limit", async () => {
-    const h = harness({ limits: { createPerMinute: 1 } });
+    const h = harness({ anonymousQps: 1 });
     await created(await h.create(IP_A, undefined, IP_B));
     await limited(await h.create(IP_A, undefined, "192.0.2.3"));
     await created(await h.create(IP_B, undefined, IP_B));
   });
 
   test("trusted proxy mode uses only the first forwarded IP", async () => {
-    const h = harness({ trustProxy: true, limits: { createPerMinute: 1 } });
+    const h = harness({ trustProxy: true, anonymousQps: 1 });
     await created(await h.create("192.0.2.254", undefined, `${IP_A}, ${IP_B}`));
     await limited(await h.create("192.0.2.253", undefined, `${IP_A}, 192.0.2.3`));
     await created(await h.create("192.0.2.254", undefined, `${IP_B}, ${IP_A}`));
@@ -241,7 +257,7 @@ describe("client IP trust and normalization", () => {
     [IP_A, "::ffff:c000:201"],
   ]) {
     test(`${first} and ${equivalent} share a quota`, async () => {
-      const h = harness({ limits: { createPerMinute: 1 } });
+      const h = harness({ anonymousQps: 1 });
       await created(await h.create(first));
       await limited(await h.create(equivalent));
     });
@@ -268,7 +284,6 @@ describe("client IP trust and normalization", () => {
 
 describe("throttle environment configuration", () => {
   const fields = {
-    REMOTE_TAB_CREATE_PER_MINUTE: "createPerMinute",
     REMOTE_TAB_ACTIVE_PER_IP: "activePerIp",
     REMOTE_TAB_ACTIVE_MAX: "activeMax",
     REMOTE_TAB_BLOB_BUDGET_BYTES: "blobBudgetBytes",
@@ -277,7 +292,6 @@ describe("throttle environment configuration", () => {
 
   test("unset values use the documented defaults", () => {
     expect(parseThrottleEnv({})).toEqual({
-      createPerMinute: 10,
       activePerIp: 20,
       activeMax: 500,
       blobBudgetBytes: 64 * 1024 * 1024,

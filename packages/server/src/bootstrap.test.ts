@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createApp } from "./app";
 import { MemoryStore } from "./memory-store";
 
-const app = createApp({ store: new MemoryStore(), apiKeys: new Map() });
+const app = createApp({ store: new MemoryStore(), anonymousQps: 10000 });
 const request = (path: string, method = "GET") =>
   app.fetch(new Request(`https://server.invalid${path}`, { method }));
 
@@ -20,7 +20,9 @@ test("agent docs are generated markdown with the custody caveat and all APIs", a
   for (const phrase of [
     "Create needs no Authorization header on an open deployment",
     "rate_limited",
-    "REMOTE_TAB_CREATE_PER_MINUTE",
+    "REMOTE_TAB_ANONYMOUS_QPS",
+    "key_service_unavailable",
+    "Authorization: Bearer",
     "HKDF",
     "AES-256-GCM",
     "handoff_done",
@@ -99,7 +101,7 @@ test("bundled app serves embedded assets from an isolated output directory", asy
     });
     expect(build.success).toBe(true);
     const { createApp: bundledApp } = await import(resolve(directory, "app.js"));
-    const isolated = bundledApp({ store: new MemoryStore(), apiKeys: new Map() });
+    const isolated = bundledApp({ store: new MemoryStore(), anonymousQps: 10000 });
     const index = await isolated.fetch(new Request("https://server.invalid/client-code"));
     expect(await index.json()).toEqual(await (await request("/client-code")).json());
     const docs = await isolated.fetch(new Request("https://server.invalid/docs"));

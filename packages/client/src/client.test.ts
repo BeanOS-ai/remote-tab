@@ -8,6 +8,7 @@ import {
   seal,
 } from "@remote-tab/protocol/src/crypto";
 import { createApp } from "../../server/src/app";
+import { StaticKeyResolver } from "../../server/src/key-resolver";
 import { MemoryStore } from "../../server/src/memory-store";
 import {
   AgentSession,
@@ -32,7 +33,8 @@ function setup(now?: () => number) {
   const store = new MemoryStore();
   const app = createApp({
     store,
-    apiKeys: new Map([["test", apiKey]]),
+    keyResolver: new StaticKeyResolver(new Map([["test", apiKey]]), { defaultQps: 0 }),
+    anonymousQps: 0,
     now: now ? () => new Date(now()) : undefined,
   });
   const fetch: Fetch = (req) => app.fetch(req);
