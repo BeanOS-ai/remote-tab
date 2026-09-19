@@ -1,0 +1,17 @@
+name: docker
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the pinned Bun server image with the frozen lockfile
+        run: docker build --progress=plain -f packages/server/Dockerfile -t remote-tab-ci .
+      - name: Check memory mode and optional GCP runtime packaging offline
+        run: bash scripts/container-smoke.sh remote-tab-ci

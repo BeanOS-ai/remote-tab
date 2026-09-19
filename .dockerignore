@@ -1,0 +1,27 @@
+# Only build inputs enter the context; no credentials, local dependencies or exports.
+**
+!package.json
+!bun.lock
+!LICENSE
+!patches/
+!patches/*.patch
+!packages/
+!packages/*/
+!packages/*/package.json
+!packages/*/src/
+!packages/*/src/**
+!scripts/
+!scripts/generate-bootstrap.ts
+!docs/
+!docs/design.md
+!docs/agent-api.md
+!docs/crypto-vector.json
+!tests/
+!tests/*/
+!tests/*/package.json
+**/node_modules
+**/*.test.ts
+**/*.spec.ts
+**/.env
+**/.env.*
+packages/server/src/generated/
