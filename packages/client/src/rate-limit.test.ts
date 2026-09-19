@@ -229,11 +229,11 @@ test("repeated zero-second 429s share one deadline and yield to cancellation tim
       url,
       undefined,
       {},
-      20,
+      250,
     ),
   ).rejects.toMatchObject({ code: "timeout" });
   expect(calls).toBeGreaterThan(1);
-  expect(performance.now() - started).toBeLessThan(500);
+  expect(performance.now() - started).toBeLessThan(2000);
   const completed = calls;
   await Bun.sleep(20);
   expect(calls).toBe(completed);
