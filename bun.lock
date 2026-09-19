@@ -78,7 +78,7 @@
     "tests/browser": {
       "name": "@remote-tab/browser-tests",
       "version": "0.0.0",
-      "dependencies": {
+      "devDependencies": {
         "playwright": "1.59.0",
       },
     },

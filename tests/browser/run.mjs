@@ -288,6 +288,8 @@ try {
     report("handoff Done and trusted human input pause/Resume");
     pngBytes(await session.send("browser_navigate", { url: `${origin}/privacy` }));
     const privateSnapshot = await session.send("browser_snapshot");
+    assert.equal(privateSnapshot.ok, true, JSON.stringify(privateSnapshot.error));
+    assert.match(privateSnapshot.result.text, /Ordinary pixels/);
     const privateShot = pngBytes(await session.send("browser_take_screenshot"));
     for (const secret of Object.values(SECRETS))
       assert.ok(!JSON.stringify(privateSnapshot).includes(secret));
