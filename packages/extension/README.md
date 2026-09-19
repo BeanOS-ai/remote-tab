@@ -97,3 +97,7 @@ AgentSession protocol against local offline fixtures. CI runs it as the separate
 [30-minute manual test plan](../../docs/manual-test-plan.md) for real-site MFA,
 Chrome UI, expiry, updates, and distribution acceptance, and record its results
 before release. A passing automated suite does not replace that human check.
+
+Version 2.0.2 fixes same-document re-sharing after Stop. Control ends immediately;
+local input-listener cleanup gets at most 250 ms before debugger detachment. If
+cleanup cannot finish, sharing remains refused safely until the page is reloaded.

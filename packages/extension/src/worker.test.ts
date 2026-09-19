@@ -36,6 +36,10 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
   });
   const reached = deferred();
   const release = deferred();
+  const cleanupReached = deferred();
+  const cleanupRelease = deferred();
+  let holdCleanup = false;
+  const teardown: string[] = [];
   const requests: Request[] = [];
   const attached: number[] = [];
   const detached: number[] = [];
@@ -89,10 +93,20 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
         attached.push(tabId);
       },
       detach: async ({ tabId }) => {
+        teardown.push("detached");
         detached.push(tabId);
       },
       sendCommand: async (_target, method, params = {}) => {
         cdpCalls.push({ method, params });
+        if (
+          method === "Runtime.evaluate" &&
+          String(params.expression).includes("__remoteTabCleanup_")
+        ) {
+          cleanupReached.resolve();
+          if (holdCleanup) await cleanupRelease.promise;
+          teardown.push("listeners removed");
+          return {};
+        }
         if (method === "Runtime.enable") {
           onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
             context: { id: 1, name: "", auxData: { isDefault: true, frameId: "main" } },
@@ -216,6 +230,7 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
       onMessage(value, source, resolve);
     });
   cleanup = async () => {
+    cleanupRelease.resolve();
     release.resolve();
     await message({ action: "stop" });
     await session.stop();
@@ -224,6 +239,12 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
     code,
     session,
     createdUrls,
+    teardown,
+    cleanupReached,
+    cleanupRelease,
+    holdCleanup: () => {
+      holdCleanup = true;
+    },
     ledgerMessage: (jobId: string, value: unknown) =>
       message(value, {
         id: api.runtime.id,
@@ -597,4 +618,64 @@ test("only the matching installed ledger page can retrieve its job", async () =>
   expect(await h.message({ action: "ledger-status", jobId })).toMatchObject({ ok: false });
   const ledger = await loadLedger(jobId, (value) => h.ledgerMessage(jobId, value));
   expect(ledger.status.state).toBe("stopped");
+});
+
+test("Stop revokes control before waiting for listener removal, then detaches in order", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  h.holdCleanup();
+  const stopping = h.message({ action: "stop" });
+  await h.cleanupReached.promise;
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false });
+  expect(h.detached).toEqual([]);
+  expect(await h.share()).toMatchObject({
+    ok: false,
+    error: "Sharing is stopping. Try again shortly.",
+  });
+  h.cleanupRelease.resolve();
+  expect(await stopping).toEqual({ ok: true });
+  expect(h.teardown).toEqual(["listeners removed", "detached"]);
+  const next = await h.anotherSession();
+  expect(await h.share({ code: next.code })).toEqual({ ok: true });
+});
+
+test("Stop still detaches when listener cleanup never completes", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  h.holdCleanup();
+  const stopping = h.message({ action: "stop" });
+  await h.cleanupReached.promise;
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false });
+  expect(await stopping).toEqual({ ok: true });
+  expect(h.teardown).toEqual(["detached"]);
+  expect((await h.session.status()).state).toBe("stopped");
+});
+
+test("failed-start teardown waits for listener cleanup before detaching", async () => {
+  const h = await setup();
+  await h.redeemElsewhere();
+  h.holdCleanup();
+  const sharing = h.share();
+  await h.cleanupReached.promise;
+  expect(h.detached).toEqual([]);
+  h.cleanupRelease.resolve();
+  expect(await sharing).toMatchObject({ ok: false });
+  expect(h.teardown).toEqual(["listeners removed", "detached"]);
+});
+
+test("Stop during startup cancels immediately and removes listeners before detaching", async () => {
+  const h = await setup("redeem");
+  const sharing = h.share();
+  await h.reached.promise;
+  h.holdCleanup();
+  const stopping = h.message({ action: "stop" });
+  await h.cleanupReached.promise;
+  expect(h.detached).toEqual([]);
+  h.cleanupRelease.resolve();
+  expect(await stopping).toEqual({ ok: true });
+  expect(h.teardown).toEqual(["listeners removed", "detached"]);
+  h.release.resolve();
+  expect(await sharing).toMatchObject({ ok: false });
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false });
+  expect(h.statusReads()).toBeLessThanOrEqual(3);
 });
