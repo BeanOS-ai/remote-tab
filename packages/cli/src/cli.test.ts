@@ -66,6 +66,10 @@ describe("CLI parser", () => {
       expect(parseArgs([command, ...args]).command).toBe(`remote_tab_${command}`);
       expect(parseArgs([`remote_tab_${command}`, ...args]).command).toBe(`remote_tab_${command}`);
     }
+    for (const command of ["status", "stop", "remote_tab_status", "remote_tab_stop"]) {
+      expect(parseArgs([command, "{}"]).args).toEqual({});
+      expect(parseArgs([command, "--args", "{}"]).args).toEqual({});
+    }
     expect(parseArgs(["ledger", "export", "--out", "example"]).out).toBe("example");
     expect(parseArgs(["create", "--ttl", "3600"]).ttl).toBe(3600);
     expect(defaultStatePath({ XDG_STATE_HOME: "/private" })).toBe(
@@ -88,7 +92,10 @@ describe("CLI parser", () => {
       ["create", "--ttl", "59"],
       ["create", "--ttl", "3601"],
       ["status", "--ttl", "60"],
-      ["status", "{}"],
+      ["status", '{"unknown":true}'],
+      ["stop", '{"unknown":true}'],
+      ["stop", "[]"],
+      ["status", "{}", "--args", "{}"],
       ["status", "--state", "one", "--state", "two"],
       ["handoff", "{}"],
       ["handoff", '{"message":3}'],
@@ -130,6 +137,7 @@ test("state reserved privately before create; bad paths, flags and overwrites ca
     expect(created.json.code).toMatch(/^rt1\.[A-Za-z0-9_-]{21}[AQgw]$/);
     expect(created.json.code).toHaveLength(26);
     expect(created.json.warning).toBe(PRIVATE_DELIVERY_WARNING);
+    expect(created.json.redeem).toContain("within 10 minutes");
     expect(created.json.state).toBe(state);
     expect((await stat(state)).mode & 0o777).toBe(0o600);
     expect((await stat(join(root, "private"))).mode & 0o777).toBe(0o700);
@@ -181,7 +189,7 @@ test("subprocess create → ready → snapshot + attachments → handoff → sto
   try {
     const created = await cli(["create", ...shared], h.env);
     expect(created.exit).toBe(0);
-    const unredeemed = (await cli(["status", ...shared])).json;
+    const unredeemed = (await cli(["status", "{}", ...shared])).json;
     expect(unredeemed.state).toBe("created");
     expect(unredeemed.hello).toBeUndefined();
     const timeout = await cli(["wait-ready", "--state", state, "--timeout-ms", "30"]);
@@ -227,7 +235,7 @@ test("subprocess create → ready → snapshot + attachments → handoff → sto
     const denied = await browser.nextCommand();
     await browser.sendError(denied.id, "scope_violation", "Outside shared site");
     expect((await failure).exit).toBe(1);
-    expect((await cli(["stop", ...shared])).json.state).toBe("stopped");
+    expect((await cli(["stop", "{}", ...shared])).json.state).toBe("stopped");
     expect((await cli(["status", ...shared])).json).toMatchObject({
       state: "stopped",
       hello: { mode: "act", scope: "https://example.test" },

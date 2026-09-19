@@ -65,5 +65,6 @@ containers+=("$invalid")
 docker start "$invalid" >/dev/null
 exit_code=$(docker wait "$invalid")
 test "$exit_code" -ne 0
-docker logs "$invalid" 2>&1 | grep -q 'REMOTE_TAB_GCS_BUCKET is required for gcp'
+# Drain the producer: grep -q can close early and turn a matching log into SIGPIPE/141.
+docker logs "$invalid" 2>&1 | grep -F 'REMOTE_TAB_GCS_BUCKET is required for gcp' >/dev/null
 echo 'PASS: GCP configuration errors fail startup'

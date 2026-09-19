@@ -18,7 +18,7 @@ export interface ClientOptions {
   helloGraceMs?: number;
   /** Server long-poll duration, 0..25 seconds; default 25. */
   pollWaitSeconds?: number;
-  /** Delay between empty polls (including before redeem); default 100 ms. */
+  /** Delay between empty polls; default 100 ms. Readiness waits use at least 1 second. */
   pollIntervalMs?: number;
   /** Bound each HTTP request, including injected transports; default 30 seconds. */
   requestTimeoutMs?: number;

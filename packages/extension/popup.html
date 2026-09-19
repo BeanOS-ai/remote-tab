@@ -1,18 +1,41 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Remote Tab</title><link rel="stylesheet" href="style.css"></head>
-<body><header><h1>Remote Tab</h1><button id="stop" type="button" disabled>Stop</button></header><p id="tab"></p>
-<form id="consent"><label for="code">Private code from your agent</label><input id="code" type="password" placeholder="rt1.…" autocomplete="off" spellcheck="false" required>
-<fieldset><legend>What may your agent do?</legend>
-<label><input type="radio" name="mode" value="read" checked> Read-only</label>
-<label><input type="radio" name="mode" value="act"> Act — click, type, navigate</label>
-<label><input type="radio" name="mode" value="full"> Full — scripting access</label></fieldset>
-<label><input type="checkbox" id="site" checked> This site only</label>
-<button id="share" type="submit">Share this tab</button></form>
-<section id="live" hidden><p id="state"></p><p id="expiry"></p><button id="extend" type="button" hidden>Extend 30 minutes</button>
-<aside id="handoff" hidden><strong>Your turn</strong><p id="handoff-message"></p><button id="done" type="button">Done</button></aside>
-<aside id="paused" hidden><p>Paused: you took over</p><button id="resume" type="button">Resume</button></aside>
-<h2>Activity</h2><ol id="feed" aria-live="polite"></ol>
-<p>Chrome’s “is debugging this browser” bar means Remote Tab controls this shared tab. Stop detaches it. Sharing also ends if you dismiss Chrome’s bar.</p>
-<p>Password, one-time-code and payment fields are private. After protected fields are encountered, scripting and console/network inspection stay unavailable for this share.</p></section>
-<button id="open-ledger" type="button" hidden>View ledger</button>
-<p id="error" role="status"></p><script src="popup.js" type="module"></script></body></html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Bean Tab Share</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<header>
+  <div class="brand"><img src="bean-creature.svg" width="42" height="39" alt="BeanOS"><div><h1>Bean Tab Share</h1><span class="tagline">Your tab. Your control.</span></div></div>
+  <button id="stop" class="danger" type="button" disabled>Stop</button>
+</header>
+<main>
+  <div class="tab-card"><div class="card-heading"><span class="eyebrow">THIS TAB</span><span id="share-status" class="status" data-state="ready">Ready to share</span></div><p id="tab"></p></div>
+  <form id="consent" novalidate>
+    <label class="field-label" for="code">Private code from your agent</label>
+    <input id="code" type="password" placeholder="Paste rt1.…" autocomplete="off" spellcheck="false" required aria-describedby="code-hint">
+    <p id="code-hint" class="hint">One use · Redeem within 10 minutes</p>
+    <fieldset><legend>What can your agent do?</legend><div class="mode-options">
+      <label class="mode"><input type="radio" name="mode" value="read" checked><span><strong>Read-only</strong><small>View the page</small></span></label>
+      <label class="mode"><input type="radio" name="mode" value="act"><span><strong>Act</strong><small>Click &amp; type</small></span></label>
+      <label class="mode"><input type="radio" name="mode" value="full"><span><strong>Full</strong><small>Run scripts</small></span></label>
+    </div></fieldset>
+    <label class="site-option"><input type="checkbox" id="site" checked><span>This site only</span></label>
+    <button id="share" class="primary" type="submit">Share this tab <span aria-hidden="true">→</span></button>
+  </form>
+  <section id="live" hidden aria-label="Sharing controls">
+    <div class="session-info"><p id="state"></p><p id="expiry"></p></div>
+    <button id="pause" class="primary" type="button">Pause agent</button>
+    <aside id="paused" hidden><strong>Agent paused</strong><p>Take your time. Resume when you’re ready.</p><button id="resume" class="primary" type="button">Resume agent</button></aside>
+    <aside id="handoff" hidden><strong>Your turn</strong><p id="handoff-message"></p><button id="done" class="primary" type="button">Done — return to agent</button></aside>
+    <button id="extend" class="secondary" type="button" hidden>Extend 30 minutes</button>
+    <div class="activity"><h2>Recent activity</h2><ol id="feed" aria-live="polite"></ol></div>
+  </section>
+  <p id="error" role="status"></p>
+  <button id="open-ledger" class="secondary" type="button" hidden>View ledger</button>
+  <details><summary>Details</summary><div class="details-content">
+    <p>Only this tab is shared. Use <strong>Pause agent</strong> before working alongside your agent; typing, clicking and navigating do not pause it automatically. <strong>Stop</strong> ends sharing.</p>
+    <p>Chrome’s debugging bar means the agent can control this tab. Dismissing it ends sharing.</p>
+    <p>Password, one-time-code and payment fields are private. After protected fields are encountered, scripting and console/network inspection stay unavailable for this share.</p>
+  </div></details>
+</main>
+<footer><span>Made with BeanOS</span><a href="https://beanos.ai/remote-tab" target="_blank" rel="noopener noreferrer">Details and help <span aria-hidden="true">↗</span></a></footer>
+<script src="popup.js" type="module"></script>
+</body></html>

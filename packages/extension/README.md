@@ -30,11 +30,18 @@ Screenshots always use the attached target via CDP, never the active window.
 Large snapshots travel as encrypted JSON attachments under the protocol's
 message ceiling. Network inspection always redacts credential headers.
 
-The popup shows recent actions, Stop, Extend near expiry, handoff Done, and
-Resume after human input pauses sharing. Pages with preexisting window capture
-handlers that could suppress takeover detection are refused; the extension does
-not reload the page or discard form state. An interrupted command remains paused
-even if the human quickly resumes. Chrome’s debugging bar is expected.
+The popup shows recent actions, Pause/Resume, Stop, Extend near expiry, handoff
+Done, and View ledger. Human movement, typing and navigation do not automatically
+pause sharing. Click **Pause** before working privately in the shared tab;
+**Resume** allows new commands without replaying interrupted ones. An interrupted
+command stays interrupted even if the human quickly resumes. Chrome's debugging
+bar is expected. The popup and ledger show timestamped local Pause/Resume records;
+these are separate from the verified encrypted command chain.
+
+Version 2.1.0 fixes #28/#29 and replaces automatic takeover with explicit controls
+per Gilad's September 19 direction. The minor bump marks that behavior change.
+After review and merge, the operator repackages the private ZIP; no store or
+public-bucket release is part of this change.
 
 Password, one-time-code, and payment-card fields are scrubbed from results and
 masked locally in screenshots; embedded frames are masked in full. Full-mode
@@ -60,11 +67,11 @@ supports up to 300 screenshots; exceeding a limit shows an error rather than
 silently omitting history. The viewer accepts up to 5,000 entries / 96 MiB, with
 32 MiB of metadata; pending transfers expire after five minutes.
 
-Package version 2.0.1 for distribution with Bun and Python 3:
+Package version 2.1.0 for distribution with Bun and Python 3:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
-  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.1.zip
+  packages/extension/package-store.sh /tmp/bean-tab-share-2.1.0.zip
 ```
 
 Release packaging requires an explicit HTTPS origin and rejects the development

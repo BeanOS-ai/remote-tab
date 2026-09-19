@@ -312,7 +312,7 @@ describe("client lifecycle", () => {
     };
     const { session } = await createSession({ serverUrl, apiKey, ...options });
     await expect(session.waitReady({ timeoutMs: 30 })).rejects.toMatchObject({ code: "timeout" });
-    expect(sleeps).toBe(3);
+    expect(sleeps).toBe(1);
     expect((await session.status()).state).toBe("created");
     await h.fetch(
       new Request(`${serverUrl}/v1/sessions/${session.sessionId}/redeem`, { method: "POST" }),
@@ -320,6 +320,51 @@ describe("client lifecycle", () => {
     await expect(session.waitReady()).rejects.toMatchObject({ code: "hijack_suspected" });
     expect(time).toBe(60);
     expect((await session.status()).state).toBe("stopped");
+  });
+
+  test("unredeemed readiness polls status at most once per second without fetching messages", async () => {
+    const h = setup();
+    let time = 0;
+    const reads: { path: string; time: number }[] = [];
+    const fetch: Fetch = (request) => {
+      if (request.method === "GET") reads.push({ path: new URL(request.url).pathname, time });
+      return h.fetch(request);
+    };
+    const { session } = await createSession({
+      serverUrl,
+      apiKey,
+      fetch,
+      pollIntervalMs: 1,
+      now: () => time,
+      sleep: async (ms) => {
+        time += ms;
+      },
+    });
+    await expect(session.waitReady({ timeoutMs: 2500 })).rejects.toMatchObject({ code: "timeout" });
+    expect(reads.map((read) => read.time)).toEqual([0, 1000, 2000]);
+    expect(reads.every((read) => read.path.endsWith(session.sessionId))).toBe(true);
+    expect(time).toBe(2500);
+  });
+
+  test("aborting readiness during its one-second backoff stops promptly", async () => {
+    const h = setup();
+    const controller = new AbortController();
+    let sleeps = 0;
+    const { session } = await createSession({
+      serverUrl,
+      apiKey,
+      fetch: h.fetch,
+      sleep: async (ms) => {
+        expect(ms).toBe(1000);
+        sleeps++;
+        controller.abort();
+        await new Promise<void>(() => {});
+      },
+    });
+    await expect(session.waitReady({ signal: controller.signal })).rejects.toMatchObject({
+      code: "aborted",
+    });
+    expect(sleeps).toBe(1);
   });
 
   test("full-code theft can produce valid hello, which does not authenticate human identity", async () => {

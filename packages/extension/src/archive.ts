@@ -1,5 +1,6 @@
 import type { Attachment, BlobReference, Ledger, LedgerEntry } from "@remote-tab/client";
 import { record } from "./chrome";
+import { CONTROL_EVENTS_NOTE, type ExtensionLedger, snapshotControlEvents } from "./control-events";
 
 const MAX_FILES = 10_000;
 const MAX_BYTES = 256 * 1024 * 1024;
@@ -50,7 +51,7 @@ export function screenshots(ledger: Ledger): { seq: number; index: number; bytes
 }
 
 /** Source-owned stored ZIP, with the CLI exportLedger JSON/path layout and fixed metadata. */
-export function makeLedgerZip(ledger: Ledger): Uint8Array {
+export function makeLedgerZip(ledger: ExtensionLedger): Uint8Array {
   checkEntries(ledger);
   const files: { name: string; bytes: Uint8Array }[] = [];
   let size = 0;
@@ -74,7 +75,21 @@ export function makeLedgerZip(ledger: Ledger): Uint8Array {
   add(
     "ledger.json",
     encoder.encode(
-      `${JSON.stringify({ sessionId: ledger.sessionId, status: ledger.status, entries }, null, 2)}\n`,
+      `${JSON.stringify(
+        {
+          sessionId: ledger.sessionId,
+          status: ledger.status,
+          entries,
+          ...(ledger.controlEvents === undefined
+            ? {}
+            : {
+                controlEvents: snapshotControlEvents(ledger.controlEvents),
+                controlEventsNote: CONTROL_EVENTS_NOTE,
+              }),
+        },
+        null,
+        2,
+      )}\n`,
     ),
   );
   files.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));

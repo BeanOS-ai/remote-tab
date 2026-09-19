@@ -402,7 +402,7 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.0.1); the store name stays **Bean Tab Share** until the M5 naming decision.
+(2.1.0); the store name stays **Bean Tab Share** until the M5 naming decision.
 Packaging does not upload or publish the extension.
 
 Popup: paste field, mode (read-only / act / full; full is labelled as
@@ -410,7 +410,7 @@ scripting access), checkbox **this site only**, **Share this tab**. While
 shared: current URL, a live feed of actions in plain words ("clicked
 Submit", "typed into Search"), a **Stop** button that is always visible, an
 **Extend** button near expiry, the handoff banner with **Done**, and a
-**Paused: you took over** state with **Resume**.
+**Pause** / **Resume** control with a timestamped **Paused by you** state.
 
 Behaviour:
 
@@ -424,25 +424,26 @@ Behaviour:
   blocks out-of-scope document requests, including redirects and link navigation.
   Only HTTP(S) tabs may be shared. A navigation outside scope is blocked,
   reported to the agent as `scope_denied`, and shown to the human.
-- **Pause on human input.** Any keyboard or pointer input in the shared tab
-  flips the session to paused; queued commands return `paused`; the human
-  clicks Resume. Monitoring runs in isolated worlds, including child frames;
-  page-script events do not trigger it. Before admitting a loaded document,
-  the extension inspects every frame execution world and refuses sharing if
-  existing window capture handlers could suppress its listener. Unknown or
-  failed inspection ends sharing; pages are never reloaded automatically.
-  The monitor also rechecks its own listeners before operations and ends
-  sharing if a same-context document replacement removes them.
-  Later page listeners cannot run before the installed monitor. Only the exact input events dispatched
-  by the current automation call are excluded. An interrupted command returns
-  `paused` even if Resume is clicked before it finishes, without uploading its
-  result or screenshot. A handoff must be completed with Done, not Resume.
-  Diagnostic buffers are cleared on pause and events are not collected while
-  paused, so human-entered credentials cannot remain in delayed console/network
-  results after a field clears itself. Automation input uses a unique timestamp
-  one second ahead to distinguish delayed CDP event delivery; only an exact
-  match received before that timestamp is excluded. Page handlers therefore see
-  adjusted timestamps for automated input; late events pause safely.
+- **Explicit Pause / Resume.** Only the installed popup's Pause control pauses
+  browser commands. Moving, clicking, typing, scrolling, or navigating in the
+  shared tab does not automatically pause; work in other tabs is unaffected.
+  An interrupted command returns `paused` even if Resume is clicked before it
+  finishes, without uploading its result or screenshot. Resume permits new
+  commands and never replays the interrupted command. An agent-requested handoff
+  still waits for the human's Done control; Resume cannot bypass it.
+  Diagnostic buffers are cleared on Pause and no events are collected while
+  paused. Protected-field scanning, masking, scope enforcement and Stop remain
+  separate safeguards. Stop always detaches locally before network cleanup.
+  This replaces the original trusted-input/timestamp takeover design per Gilad's
+  September 19 instruction: Chrome's extra trusted events and ordinary human
+  movement made automatic takeover too brittle (#28). Users must explicitly
+  Pause before working privately in the shared tab; input no longer signals
+  consent to interrupt automatically. No takeover listeners or synthetic future
+  timestamps are injected.
+  Pause/Resume actions retain UTC timestamps in the popup activity and in the
+  extension's ledger viewer and ZIP as local control records, labelled separately
+  from the authenticated encrypted command chain. The `rt1` wire protocol stays
+  compatible; existing CLI ledgers do not contain these extension-local records.
 - **Redaction, kept simple.** Values of inputs whose type is `password`, or
   whose `autocomplete` is `one-time-code` or `cc-*`, are never included in
   snapshots or results, and those elements are masked in screenshots. No
@@ -500,7 +501,7 @@ after stop. The dead-drop status has no live paused-by-human field. The
 extension answers authenticated `remote_tab_status` commands with live pause
 state, but the MCP/CLI transport-status adapters do not yet request it and
 must not infer an unknown value as false. The popup shows current pause state,
-and queued browser commands receive `paused` during human takeover.
+and queued browser commands receive `paused` while explicitly paused.
 
 The M2 Bun CLI accepts tool arguments as a JSON object and shares the same
 client implementation. `create` saves only the session connection state in
@@ -683,7 +684,7 @@ server in-process, the shared browser protocol implementation (`BrowserPeer`)
 driven by a deterministic fake tab, and the real client through CLI and MCP.
 The M2 harness models snapshots, form actions, PNGs and human handoff. M3 adds
 the actual extension driver against fake CDP, including mode/scope enforcement,
-redaction, handoff, takeover, Stop/expiry races, and verified ledger/media export.
+redaction, handoff, explicit pause, Stop/expiry races, and verified ledger/media export.
 A separate browser CI job loads the built MV3 extension in real Chromium and
 drives AgentSession against a local server and offline fixture pages, covering
 actions, privacy, human controls, and ledger verification/export. Only browser

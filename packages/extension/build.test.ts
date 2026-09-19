@@ -48,6 +48,7 @@ test("browser bundle and manifest share one origin with no broad or legacy hosts
     expect(/(?:from|import)\s*["\']node:/.test(worker)).toBe(false);
     for (const file of [
       "popup.js",
+      "bean-creature.svg",
       "ledger.js",
       "ledger.html",
       "ledger.css",

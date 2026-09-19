@@ -275,17 +275,34 @@ try {
     await clickControl(popup, "done");
     await handoff;
     await tab.bringToFront();
+    await tab.locator("#name").click();
     await tab.keyboard.press("ArrowLeft");
+    await tab.mouse.move(30, 30);
+    await tab.mouse.wheel(0, 30);
+    await tab.goto(`${origin}/form?human-navigation=1`);
+    assert.equal((await session.send("remote_tab_status")).result.paused, false);
+    const afterHumanNavigation = await session.send("browser_snapshot");
+    assert.equal(afterHumanNavigation.ok, true);
+    const nameAfterNavigation = refFor(afterHumanNavigation.result.text, "Name");
+    assert.equal(await popup.locator("#paused").isHidden(), true);
+    await popup.locator("#pause").waitFor({ state: "visible" });
+    await clickControl(popup, "pause");
     await popup.locator("#paused").waitFor({ state: "visible" });
+    assert.equal((await session.send("remote_tab_status")).result.paused, true);
     const beforePaused = await tab.evaluate(() => document.querySelector("#name").value);
     assert.equal(
-      (await session.send("browser_type", { ref: name, text: "must-not-run" })).error.code,
+      (await session.send("browser_type", { ref: nameAfterNavigation, text: "must-not-run" })).error
+        .code,
       "paused",
     );
     assert.equal(await tab.evaluate(() => document.querySelector("#name").value), beforePaused);
     await clickControl(popup, "resume");
+    await popup.locator("#paused").waitFor({ state: "hidden" });
+    assert.equal((await session.send("remote_tab_status")).result.paused, false);
     assert.equal((await session.send("browser_snapshot")).ok, true);
-    report("handoff Done and trusted human input pause/Resume");
+    report(
+      "handoff Done; ordinary input/navigation stay active; explicit Pause/Resume blocks and restores commands",
+    );
     pngBytes(await session.send("browser_navigate", { url: `${origin}/privacy` }));
     const privateSnapshot = await session.send("browser_snapshot");
     assert.equal(privateSnapshot.ok, true, JSON.stringify(privateSnapshot.error));
@@ -344,6 +361,20 @@ try {
     const exported = JSON.parse(new TextDecoder().decode(archive.get("ledger.json")));
     assert.equal(exported.sessionId, history.sessionId);
     assert.deepEqual(exported.status, history.status);
+    assert.deepEqual(
+      exported.controlEvents.map((event) => event.action),
+      ["pause", "resume"],
+    );
+    const controlTimestamps = exported.controlEvents.map((event) => Date.parse(event.timestamp));
+    assert.ok(controlTimestamps.every(Number.isFinite));
+    assert.ok(controlTimestamps[1] >= controlTimestamps[0]);
+    const localControls = ledgerPage.locator("#local-human-controls");
+    await localControls.waitFor({ state: "visible" });
+    const controlsText = await localControls.innerText();
+    assert.match(controlsText, /Human paused sharing/);
+    assert.match(controlsText, /Human resumed sharing/);
+    assert.match(controlsText, /not part of the authenticated command chain/);
+    for (const event of exported.controlEvents) assert.ok(controlsText.includes(event.timestamp));
     assert.deepEqual(
       await verifyChain(
         exported.sessionId,
@@ -431,10 +462,7 @@ try {
     await (await stop(tab, read.popup, read.session)).close();
     await read.popup.close();
     report("read-only mode blocks real input without DOM changes");
-    // A new share on the exact same document must not mistake the previous monitor's
-    // listeners for hostile page handlers. Do not reload between these two shares.
-    // Target DOM reads use evaluate: Playwright locator helpers install their own capture
-    // listeners, which the extension correctly refuses on a subsequent share.
+    // Stop and share again on the exact same document without a reload.
     const documentIdentity = await tab.evaluate(() => performance.timeOrigin);
     const full = await share(tab, "full");
     assert.equal(await tab.evaluate(() => performance.timeOrigin), documentIdentity);

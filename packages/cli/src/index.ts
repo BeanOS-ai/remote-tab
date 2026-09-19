@@ -80,7 +80,8 @@ export function parseArgs(argv: string[]): Arguments {
   if (!(COMMANDS as readonly string[]).includes(command)) invalid("Unknown command; use --help");
   command = aliases[command] ?? command;
   const browser = (BROWSER_TOOLS as readonly string[]).includes(command);
-  const takesArgs = browser || command === "remote_tab_handoff";
+  const emptyArgs = command === "remote_tab_status" || command === "remote_tab_stop";
+  const takesArgs = browser || command === "remote_tab_handoff" || emptyArgs;
   const json = flags.get("--args") ?? positionals.shift();
   if (positionals.length) invalid("Unexpected positional arguments");
   if (json !== undefined && !takesArgs) invalid("This command does not accept JSON arguments");
@@ -96,6 +97,7 @@ export function parseArgs(argv: string[]): Arguments {
       invalid("Arguments must be a JSON object");
     args = value as Record<string, unknown>;
   }
+  if (emptyArgs && Object.keys(args).length) invalid("This command only accepts an empty object");
   if (
     command === "remote_tab_handoff" &&
     (typeof args.message !== "string" ||
@@ -213,6 +215,7 @@ export async function execute(
       ledger:
         "ledger export --out NEW_DIRECTORY | ledger render --out FILE.gif|FILE.webm (M3 extension renderer)",
       handoff: 'handoff {"message":"Your turn"}; waits for human Done',
+      status: "status [{}] | stop [{}]; JSON arguments are optional and must be empty",
     };
   if (args.command === "ledger render")
     throw new CliError(
@@ -240,7 +243,13 @@ export async function execute(
       });
       await reservation.writeFile(`${JSON.stringify(session.exportState())}\n`);
       await reservation.sync();
-      return { code, warning: PRIVATE_DELIVERY_WARNING, state: statePath };
+      return {
+        code,
+        warning: PRIVATE_DELIVERY_WARNING,
+        redeem:
+          "Use this code within 10 minutes, before the session expires. Each code works once.",
+        state: statePath,
+      };
     } catch (error) {
       await rm(statePath, { force: true });
       throw error;

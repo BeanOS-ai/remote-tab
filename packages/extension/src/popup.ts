@@ -12,6 +12,19 @@ async function render() {
   const sharing = state.sharing === true;
   element("open-ledger").hidden = typeof state.sessionId !== "string";
   const starting = state.starting === true || submitting;
+  const handoff = record(state.handoff) ? state.handoff : undefined;
+  const paused = state.paused === true;
+  const badge = element("share-status");
+  badge.textContent = starting
+    ? "Connecting…"
+    : sharing
+      ? handoff
+        ? "Your turn"
+        : paused
+          ? "Paused"
+          : "Sharing"
+      : "Ready to share";
+  badge.dataset.state = sharing ? (paused || handoff ? "paused" : "sharing") : "ready";
   element("consent").hidden = sharing || starting;
   element("live").hidden = !sharing;
   element<HTMLButtonElement>("stop").disabled = !sharing && !starting;
@@ -22,10 +35,10 @@ async function render() {
     typeof state.expiresAt === "string" ? Date.parse(state.expiresAt) - Date.now() : 0;
   element("expiry").textContent = `Ends in ${Math.max(0, Math.ceil(remaining / 60000))} minutes`;
   element("extend").hidden = !sharing || state.extended === true || remaining > 5 * 60_000;
-  const handoff = record(state.handoff) ? state.handoff : undefined;
   element("handoff").hidden = !handoff;
   element("handoff-message").textContent = String(handoff?.message ?? "");
   element("paused").hidden = !sharing || state.paused !== true || !!handoff;
+  element("pause").hidden = !sharing || paused || !!handoff;
   const actions = Array.isArray(state.actions) ? state.actions.map(String) : [];
   if (JSON.stringify(actions) !== feedText) {
     feedText = JSON.stringify(actions);
@@ -81,7 +94,7 @@ element<HTMLFormElement>("consent").onsubmit = async (event) => {
     submitting = false;
   }
 };
-for (const action of ["stop", "extend", "done", "resume", "open-ledger"]) {
+for (const action of ["stop", "pause", "extend", "done", "resume", "open-ledger"]) {
   element<HTMLButtonElement>(action).onclick = async () => {
     const button = element<HTMLButtonElement>(action);
     button.disabled = true;

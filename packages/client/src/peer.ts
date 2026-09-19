@@ -514,8 +514,12 @@ export class Peer {
     if (remaining <= 0) throw new RemoteTabError("timeout", "Timed out waiting for peer");
     return remaining;
   }
-  protected async pause(deadline: number, signal?: AbortSignal): Promise<void> {
-    const ms = Math.min(this.options.pollIntervalMs, this.checkWait(deadline, signal));
+  protected async pause(
+    deadline: number,
+    signal?: AbortSignal,
+    intervalMs = this.options.pollIntervalMs,
+  ): Promise<void> {
+    const ms = Math.min(intervalMs, this.checkWait(deadline, signal));
     let onAbort: (() => void) | undefined;
     try {
       await Promise.race([
