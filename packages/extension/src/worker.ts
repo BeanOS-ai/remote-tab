@@ -1,7 +1,8 @@
 import { RemoteTabError } from "@remote-tab/client";
 import { parseCode } from "@remote-tab/protocol";
-import { type Sender, record } from "./chrome";
+import { type Sender, type Tab, record } from "./chrome";
 import { DriverError, TabDriver } from "./driver";
+import { HANDOFF_NOTIFICATION, HandoffAttention, clearAttentionChrome } from "./handoff-attention";
 import { LedgerJobs } from "./ledger-data";
 import { popupError } from "./popup-error";
 import { PrivacyGuard } from "./privacy";
@@ -10,13 +11,15 @@ import { SharedSession } from "./session";
 
 const ledgers = new LedgerJobs();
 let active: SharedSession | undefined;
+let attention: HandoffAttention | undefined;
+const startupAttention = clearAttentionChrome();
 async function openLedger(share: SharedSession, settled?: Promise<void>) {
   const jobId = ledgers.create(share.peer, settled, share.controlEvents);
   try {
     await chrome.tabs.create({ url: chrome.runtime.getURL(`ledger.html#${jobId}`) });
   } catch {
     ledgers.release(jobId);
-    throw new Error("Could not open the ledger. Try again from the popup.");
+    throw new Error("Could not open the interaction summary. Try again from the popup.");
   }
 }
 function ledgerRequest(message: Record<string, unknown>) {
@@ -47,15 +50,35 @@ let driver: TabDriver | undefined;
 function trusted(sender: Sender) {
   return sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("popup.html");
 }
+async function focusSharedTab() {
+  if (!active?.state.sharing || tabId === undefined) throw new Error("No tab is being shared");
+  let tab: Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    throw new Error("The shared tab was closed. Stop this share to continue.");
+  }
+  await chrome.tabs.update(tabId, { active: true });
+  if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
+  return { ok: true };
+}
 async function handle(message: unknown) {
   if (!record(message)) throw new Error("Invalid request");
+  if (message.action === "focus-shared") return focusSharedTab();
   if (message.action === "state") {
+    let tabMissing = false;
+    let windowId: number | undefined;
     if (active?.state.sharing && tabId !== undefined) {
-      const tab = await chrome.tabs.get(tabId);
-      active.state.url = tab.url;
-      active.state.title = tab.title;
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        active.state.url = tab.url;
+        active.state.title = tab.title;
+        windowId = tab.windowId;
+      } catch {
+        tabMissing = true;
+      }
     }
-    return { ...(active?.state ?? { sharing: false }), starting };
+    return { ...(active?.state ?? { sharing: false }), starting, tabId, windowId, tabMissing };
   }
   if (message.action === "open-ledger") {
     if (!active) throw new Error("No session history is available in this worker");
@@ -78,6 +101,7 @@ async function handle(message: unknown) {
     if (message.action === "extend") {
       try {
         await active.extend();
+        await attention?.extend(active.state.expiresAt ?? "");
       } catch (error) {
         if (error instanceof RemoteTabError && error.code === "ttl_exceeded")
           throw new Error("This share has reached its 60-minute limit");
@@ -108,6 +132,8 @@ async function handle(message: unknown) {
   let selectedId: number | undefined;
   let boundShare: SharedSession | undefined;
   try {
+    await startupAttention;
+    await attention?.clear();
     const tab = await chrome.tabs.get(message.tabId);
     if (tab.id !== message.tabId || tab.url !== message.url)
       throw new Error("The tab changed. Reopen the popup to confirm sharing.");
@@ -139,6 +165,12 @@ async function handle(message: unknown) {
       if (boundShare?.interrupted && !maintenance) throw new DriverError("paused", "Paused by you");
       return rawCdp(method, params);
     };
+    const newAttention = new HandoffAttention(rawCdp, async (id) => {
+      if (!boundShare?.state.sharing || boundShare.state.handoff?.id !== id)
+        throw new Error("This handoff is no longer pending");
+      await boundShare.done();
+    });
+    attention = newAttention;
     const privacy = new PrivacyGuard(cdp);
     await privacy.scan();
     const newDriver = new TabDriver(cdp, {
@@ -163,10 +195,14 @@ async function handle(message: unknown) {
     if (pending.cancelled) throw new Error("Sharing cancelled");
     boundShare = await SharedSession.connect({
       isCancelled: () => pending.cancelled,
+      onHandoff: (handoff, expiresAt) => {
+        if (handoff) newAttention.show(handoff.id, handoff.message, expiresAt);
+        else return newAttention.clear();
+      },
       onStop: (share, settled) => {
         void openLedger(share, settled).catch(() => {
           share.state.notice =
-            "Sharing stopped. Open the ledger from the popup to save your history.";
+            "Sharing stopped. Open the interaction summary from the popup to save your history.";
         });
       },
       code: message.code,
@@ -181,12 +217,14 @@ async function handle(message: unknown) {
         extension_version: chrome.runtime.getManifest().version,
       },
       detach: async () => {
+        await newAttention.clear();
         await chrome.debugger.detach(target);
       },
     });
     active = boundShare;
     return { ok: true };
   } catch (error) {
+    await attention?.clear();
     if (attached && selectedId !== undefined)
       await chrome.debugger.detach({ tabId: selectedId }).catch(() => {});
     driver = undefined;
@@ -224,7 +262,17 @@ chrome.debugger.onEvent.addListener((target, method, params) => {
     cancelStart();
     return active?.stop();
   };
-  if (!target.sessionId) void driver?.onEvent(method, params ?? {}).catch(failed);
+  if (!target.sessionId) {
+    // Revoke before processing any document transition; never carry a Done
+    // capability or attention message onto a new page, including same-document navigation.
+    if (
+      (method === "Page.frameNavigated" && record(params?.frame) && !params.frame.parentId) ||
+      method === "Page.navigatedWithinDocument"
+    )
+      void attention?.clear();
+    void attention?.onEvent(method, params ?? {}).catch(failed);
+    void driver?.onEvent(method, params ?? {}).catch(failed);
+  }
 });
 chrome.debugger.onDetach.addListener((target) => {
   if (target.tabId === tabId) {
@@ -237,4 +285,8 @@ chrome.tabs.onRemoved.addListener((id) => {
     cancelStart();
     void active?.stop();
   }
+});
+
+chrome.notifications.onClicked.addListener((id) => {
+  if (id === HANDOFF_NOTIFICATION && active?.state.handoff) void focusSharedTab().catch(() => {});
 });

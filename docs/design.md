@@ -118,7 +118,7 @@ three-part format was never distributed.
    extension** (an extension page, code shipped with the extension), which
    decrypts locally, verifies the hash chain, and offers JSON + PNG export and
    a GIF/video render. The agent side can do the same through the CLI. The
-   server serves no ledger page (§5.5). Store cleanup follows §5.3 retention
+   server serves no interaction summary page (§5.5). Store cleanup follows §5.3 retention
    eligibility; deletion is asynchronous. The export is the durable copy.
 
 ## 5. Transport: the dead drop
@@ -219,7 +219,7 @@ possible for agents with UDP egress but is not worth its ops surface for v1.
 The blind-server promise for the human requires that code handling their
 secret comes from the installed extension, never a page served by the
 server. A URL fragment keeps a secret out of the HTTP request but not out of
-scripts on the page. There is no landing page, code link, ledger viewer, or
+scripts on the page. There is no landing page, code link, interaction summary viewer, or
 browser-executed JavaScript on this server. The extension's Web Store
 channel remains the human's client-code trust root.
 
@@ -402,13 +402,16 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.1.0); the store name stays **Bean Tab Share** until the M5 naming decision.
+(2.2.0); the display name is **Remote Tab** and the ZIP basename is
+`remote-tab-<version>.zip`. This rename does not update the public listing or
+the separate legacy Bean Tab Share tool.
 Packaging does not upload or publish the extension.
 
 Popup: paste field, mode (read-only / act / full; full is labelled as
-scripting access), checkbox **this site only**, **Share this tab**. While
-shared: current URL, a live feed of actions in plain words ("clicked
-Submit", "typed into Search"), a **Stop** button that is always visible, an
+scripting access), checkbox **this site only**, **Read my tab** in Read-only mode or
+**Control my tab** in Act/Full mode. The footer reads **by BeanOS.ai**. While
+shared: shared tab title and origin, **Go to shared tab** when viewing another
+tab, a live feed of actions in plain words ("clicked Submit", "typed into Search"), a **Stop** button that is always visible, an
 **Extend** button near expiry, the handoff banner with **Done**, and a
 **Pause** / **Resume** control with a timestamped **Paused by you** state.
 
@@ -441,7 +444,7 @@ Behaviour:
   consent to interrupt automatically. No takeover listeners or synthetic future
   timestamps are injected.
   Pause/Resume actions retain UTC timestamps in the popup activity and in the
-  extension's ledger viewer and ZIP as local control records, labelled separately
+  extension's interaction summary viewer and ZIP as local control records, labelled separately
   from the authenticated encrypted command chain. The `rt1` wire protocol stays
   compatible; existing CLI ledgers do not contain these extension-local records.
 - **Redaction, kept simple.** Values of inputs whose type is `password`, or
@@ -510,7 +513,7 @@ prints the code with the private-delivery warning. Later commands resume
 that file; the platform API key is not saved. Ledger export verifies and
 decrypts everything before creating a new output directory. The CLI
 `ledger render --out <file.gif|webm>` command currently reports that rendering
-is available in the installed extension ledger page; CLI rendering itself remains unimplemented.
+is available in the installed extension interaction summary page; CLI rendering itself remains unimplemented.
 
 Coding harnesses: Claude Code and Codex attach the MCP server or shell out to
 the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
@@ -518,7 +521,7 @@ the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
 
 ## 9. Ledger
 
-Every message is in the chain (§5.2). The ledger viewer is an extension
+Every message is in the chain (§5.2). The interaction summary viewer is an extension
 page (or `remote-tab ledger` in the CLI); it decrypts, verifies the chain end
 to end, and shows a timeline: command, plain-words summary, screenshot,
 result. It is never served by the dead-drop server (§5.5). Export produces
@@ -530,7 +533,7 @@ pipeline.
 
 M3 implements this as an installed `ledger.html` page. Stop opens it immediately
 while local control detaches; retrieval waits for the terminal request to settle.
-An active **View ledger** is an explicitly labeled immutable snapshot, and only
+An active **View interaction summary** is an explicitly labeled immutable snapshot, and only
 stopped/expired snapshots enable final GIF rendering. Snapshot state and chain
 head come from the same captured status: a later concurrent Stop cannot label
 an earlier active snapshot as final. Each transfer captures its

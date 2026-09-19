@@ -156,6 +156,8 @@ try {
   loading = false;
   await page.locator('#status[data-state="verified"]').waitFor();
   assert.match(await page.locator("#status").textContent(), /stopped session history/);
+  assert.equal(await page.title(), "Remote Tab interaction summary");
+  assert.equal(await page.locator("h1").textContent(), "Interaction summary");
   assert.match(
     await page.locator("#session").textContent(),
     new RegExp(`Last sequence ${history.status.last_seq}`),

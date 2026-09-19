@@ -3,6 +3,7 @@ export interface Tab {
   id?: number;
   url?: string;
   title?: string;
+  windowId?: number;
 }
 export interface Sender {
   id?: string;
@@ -25,8 +26,29 @@ export interface ChromeApi {
   tabs: {
     query(query: { active: boolean; currentWindow: boolean }): Promise<Tab[]>;
     get(id: number): Promise<Tab>;
+    update(id: number, options: { active: boolean }): Promise<Tab>;
     create(options: { url: string }): Promise<Tab>;
     onRemoved: Event<(id: number) => void>;
+  };
+  windows: { update(id: number, options: { focused: boolean }): Promise<unknown> };
+  action: {
+    setBadgeText(options: { text: string }): Promise<void>;
+    setBadgeBackgroundColor(options: { color: string }): Promise<void>;
+    setTitle(options: { title: string }): Promise<void>;
+  };
+  notifications: {
+    create(
+      id: string,
+      options: {
+        type: "basic";
+        iconUrl: string;
+        title: string;
+        message: string;
+        requireInteraction: boolean;
+      },
+    ): Promise<string>;
+    clear(id: string): Promise<boolean>;
+    onClicked: Event<(id: string) => void>;
   };
   debugger: {
     attach(target: { tabId: number }, version: string): Promise<void>;

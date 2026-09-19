@@ -108,6 +108,68 @@ async function share(tab, mode) {
 async function clickControl(popup, id) {
   await popup.locator(`#${id}`).evaluate((button) => button.click());
 }
+async function attentionState(pending) {
+  return worker.evaluate(async (pending) => {
+    const until = Date.now() + 5000;
+    let state;
+    do {
+      state = {
+        badge: await chrome.action.getBadgeText({}),
+        title: await chrome.action.getTitle({}),
+        notifications: await chrome.notifications.getAll(),
+      };
+      if (
+        state.badge === (pending ? "!" : "") &&
+        Boolean(state.notifications["remote-tab-handoff"]) === pending
+      )
+        return state;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } while (Date.now() < until);
+    return state;
+  }, pending);
+}
+async function handoffDonePosition(tab) {
+  return worker.evaluate(async (url) => {
+    const tab = (await chrome.tabs.query({})).find((tab) => tab.url === url);
+    const target = { tabId: tab.id };
+    await chrome.debugger.sendCommand(target, "DOM.enable");
+    const { nodes } = await chrome.debugger.sendCommand(target, "DOM.getFlattenedDocument", {
+      depth: -1,
+      pierce: true,
+    });
+    const host = nodes.find((node) => node.attributes?.includes("remote-tab-handoff"));
+    if (!host?.shadowRoots?.length) throw new Error("Installed worker handoff shadow root missing");
+    // Resolve only descendants of the actual handoff host, not page-authored buttons.
+    const parents = new Map(nodes.map((node) => [node.nodeId, node.parentId]));
+    const descendants = nodes.filter((node) => {
+      let id = node.nodeId;
+      while (id && id !== host.shadowRoots[0].nodeId) id = parents.get(id);
+      return Boolean(id);
+    });
+    for (const node of descendants.filter((node) => node.nodeName === "BUTTON")) {
+      const { object } = await chrome.debugger.sendCommand(target, "DOM.resolveNode", {
+        nodeId: node.nodeId,
+      });
+      try {
+        const { result } = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
+          objectId: object.objectId,
+          functionDeclaration: `function(){
+            if(this.textContent !== "Done") return null;
+            const r = this.getBoundingClientRect();
+            return { x:r.x+r.width/2, y:r.y+r.height/2 };
+          }`,
+          returnByValue: true,
+        });
+        if (result.value) return result.value;
+      } finally {
+        await chrome.debugger.sendCommand(target, "Runtime.releaseObject", {
+          objectId: object.objectId,
+        });
+      }
+    }
+    throw new Error("Installed worker handoff Done button missing");
+  }, tab.url());
+}
 async function stop(tab, popup, session) {
   const ledgerReady = context.waitForEvent("page", {
     predicate: (page) => page.url().includes("ledger.html"),
@@ -235,7 +297,9 @@ try {
     tab.on("pageerror", (error) => failures.push(error.message));
     await tab.goto(`${origin}/form`);
     report("MV3 worker and local form loaded");
-    const { session, popup } = await share(tab, "act");
+    const shared = await share(tab, "act");
+    const session = shared.session;
+    let popup = shared.popup;
     report("authenticated act hello");
     const snapshot = await session.send("browser_snapshot");
     assert.equal(snapshot.ok, true);
@@ -267,13 +331,50 @@ try {
       handedOff = true;
     });
     await popup.locator("#handoff").waitFor({ state: "visible" });
+    await popup.close();
+    await tab.bringToFront();
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "visible" });
+    const pendingAttention = await attentionState(true);
+    assert.equal(pendingAttention.badge, "!");
+    assert.match(pendingAttention.title, /your turn.*waiting/i);
+    assert.equal(pendingAttention.notifications["remote-tab-handoff"], true);
+    assert.equal(
+      await tab.evaluate(() => {
+        const host = document.querySelector("#remote-tab-handoff");
+        host.click();
+        host.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        host.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        window.postMessage({ type: "remote-tab-handoff-done" }, "*");
+        return host.shadowRoot;
+      }),
+      null,
+      "The ordinary page cannot access the installed worker's closed handoff shadow root",
+    );
     assert.equal(handedOff, false);
     await assert.rejects(
       AgentSession.resume(session.exportState(), options).send("browser_click", { ref: submit }),
       { code: "handoff_pending" },
     );
-    await clickControl(popup, "done");
+    const donePosition = await handoffDonePosition(tab);
+    await tab.mouse.click(donePosition.x, donePosition.y);
     await handoff;
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "detached" });
+    const clearedAttention = await attentionState(false);
+    assert.equal(clearedAttention.badge, "");
+    assert.equal(clearedAttention.title, "Remote Tab");
+    assert.equal(clearedAttention.notifications["remote-tab-handoff"], undefined);
+    report(
+      "closed-popup handoff: installed worker badge/notification, forgery rejection, native in-tab Done and attention cleanup",
+    );
+    // A later request must still support the extension popup's existing Done path.
+    popup = await popupFor(tab);
+    const nextHandoff = session.handoff("Review again, then use the extension Done button");
+    await popup.locator("#handoff").waitFor({ state: "visible" });
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "visible" });
+    await clickControl(popup, "done");
+    await nextHandoff;
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "detached" });
+    assert.equal((await attentionState(false)).badge, "");
     await tab.bringToFront();
     await tab.locator("#name").click();
     await tab.keyboard.press("ArrowLeft");

@@ -45,11 +45,12 @@ try {
       requests: [],
       resolveShare: undefined,
       invalidEvents: 0,
+      activeTab: { id: 17, url: "https://example.test/form", title: "Consented tab" },
     };
     document.addEventListener("invalid", () => globalThis.popupTest.invalidEvents++, true);
     Object.assign(globalThis.chrome, {
       tabs: {
-        query: async () => [{ id: 17, url: "https://example.test/form", title: "Consented tab" }],
+        query: async () => [globalThis.popupTest.activeTab],
       },
       runtime: {
         sendMessage: async (message) => {
@@ -70,6 +71,8 @@ try {
             test.resolveShare?.({ ok: false, error: "Sharing cancelled" });
           }
           if (message.action === "pause") test.state.paused = true;
+          if (message.action === "focus-shared")
+            test.activeTab = { id: test.state.tabId, url: test.state.url, title: test.state.title };
           if (message.action === "resume") test.state.paused = false;
           if (message.action === "done") {
             test.state.paused = false;
@@ -101,6 +104,17 @@ try {
     true,
   );
   assert.equal(await page.locator('a[href="https://beanos.ai/remote-tab"]').count(), 1);
+  assert.equal(await page.title(), "Remote Tab");
+  assert.equal(await page.locator("h1").textContent(), "Remote Tab");
+  assert.equal(await page.locator("footer > span").textContent(), "by BeanOS.ai");
+  assert.equal(await page.locator("#share-label").textContent(), "Read my tab");
+  for (const mode of ["act", "full", "read"]) {
+    await page.locator(`input[name=mode][value=${mode}]`).check();
+    assert.equal(
+      await page.locator("#share-label").textContent(),
+      mode === "read" ? "Read my tab" : "Control my tab",
+    );
+  }
   assert.equal(await page.locator("details").getAttribute("open"), null);
   if (screenshotDir)
     await page.locator("body").screenshot({ path: `${screenshotDir}/consent.png` });
@@ -151,6 +165,9 @@ try {
 
   const live = {
     sharing: true,
+    tabId: 17,
+    windowId: 1,
+    tabMissing: false,
     mode: "act",
     scope: "example.test",
     paused: false,
@@ -165,11 +182,43 @@ try {
   }, live);
   await page.locator("#pause").waitFor({ state: "visible" });
   assert.equal(await page.locator("#share-status").textContent(), "Sharing");
+  assert.equal(
+    await page.locator("#state").textContent(),
+    "Agent can click and type · example.test only",
+  );
+  assert.equal(await page.locator("#tab-label").textContent(), "SHARED TAB");
+  assert.equal(await page.locator("#tab").textContent(), "Shared tab\nhttps://example.test");
+  assert.equal(await page.locator("#focus-shared").isVisible(), false);
+  assert.equal(await page.locator("#shared-tab-status").isVisible(), false);
+  assert.equal(await page.locator("#open-ledger").textContent(), "View interaction summary");
   await page.evaluate(() => {
     document.getElementById("error").textContent = "";
   });
   if (screenshotDir)
     await page.locator("body").screenshot({ path: `${screenshotDir}/sharing.png` });
+  await page.evaluate(() => {
+    globalThis.popupTest.activeTab = {
+      id: 29,
+      url: "https://elsewhere.test/",
+      title: "Another tab",
+    };
+  });
+  await page.locator("#focus-shared").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#focus-shared").textContent(), "Go to shared tab");
+  assert.equal(await page.locator("#tab").textContent(), "Shared tab\nhttps://example.test");
+  assert.equal(
+    await page.locator("#shared-tab-status").textContent(),
+    "You’re viewing a different tab.",
+  );
+  if (screenshotDir)
+    await page.locator("body").screenshot({ path: `${screenshotDir}/other-tab.png` });
+  await page.locator("#focus-shared").click();
+  await page.locator("#focus-shared").waitFor({ state: "hidden" });
+  assert.deepEqual(
+    await page.evaluate(() => globalThis.popupTest.requests.at(-1)),
+    { action: "focus-shared" },
+    "The worker chooses the consented target; the popup sends no tab or window override",
+  );
   await page.locator("#pause").click();
   await page.locator("#resume").waitFor({ state: "visible" });
   assert.equal(await page.locator("#share-status").textContent(), "Paused");
@@ -203,7 +252,7 @@ try {
   assert.equal(await page.locator("#extend").isVisible(), true);
   assert.equal(await page.locator("#handoff-message").textContent(), malicious);
   assert.equal(await page.locator("#feed li").textContent(), malicious);
-  assert.equal(await page.locator("#tab").textContent(), `${malicious}\n${live.url}`);
+  assert.equal(await page.locator("#tab").textContent(), `${malicious}\nhttps://example.test`);
   assert.equal(await page.locator("#injected-image").count(), 0);
   assert.equal(await page.evaluate(() => globalThis.injected === true), false);
   await page.locator("#done").click();
@@ -221,9 +270,43 @@ try {
     false,
     "Already-extended sessions cannot extend again",
   );
+  await page.evaluate((state) => {
+    globalThis.popupTest.state = {
+      ...state,
+      tabMissing: true,
+      paused: true,
+      handoff: { id: "handoff", message: "Help requested" },
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    };
+    globalThis.popupTest.activeTab = {
+      id: 29,
+      title: "Another tab",
+      url: "https://elsewhere.test/",
+    };
+  }, live);
+  await page.waitForFunction(
+    () => document.getElementById("share-status").textContent === "Shared tab closed",
+  );
+  assert.equal(
+    await page.locator("#shared-tab-status").textContent(),
+    "The shared tab is closed. Use Stop to end this share.",
+  );
+  for (const id of ["focus-shared", "pause", "resume", "done", "extend"])
+    assert.equal(await page.locator(`#${id}`).isVisible(), false);
+  assert.equal(await page.locator("#stop").isEnabled(), true);
+  assert.equal(await page.locator("#state").textContent(), "No agent access: shared tab closed.");
+  assert.equal(await page.locator("#expiry").isVisible(), false);
+  if (screenshotDir)
+    await page.locator("body").screenshot({ path: `${screenshotDir}/closed-tab.png` });
+  await page.locator("#stop").click();
+  await page.locator("#consent").waitFor({ state: "visible" });
+  assert.equal(await page.locator("#tab-label").textContent(), "THIS TAB");
+  assert.equal(await page.locator("#tab").textContent(), "Another tab\nhttps://elsewhere.test/");
+  assert.equal(await page.locator("#shared-tab-status").isVisible(), false);
+  assert.equal(await page.locator("#focus-shared").isVisible(), false);
   assert.deepEqual(failures, []);
   console.log(
-    "PASS: 372px popup loads bundled Bean Creature; empty/malformed-code validation is submit-only; Stop works during startup; explicit Pause/Resume and handoff Done are exclusive; Extend is near-expiry and once-only; untrusted title/actions/handoff render as text",
+    "PASS: 372px popup loads bundled Bean Creature; validation is submit-only; Stop works during startup; Pause/Resume and handoff Done are exclusive; Extend is near-expiry and once-only; untrusted data renders as text; interaction summary wording and same/other/closed shared-tab states work",
   );
 } finally {
   await browser.close();

@@ -33,11 +33,43 @@ const REDACTED = "[redacted]";
 const MAX_VALUES = 512;
 const MAX_SECRET_BYTES = 1024 * 1024;
 const MAX_NODES = 100000;
-const deny = () =>
-  new DriverError(
+const FAILURE_MESSAGES = {
+  inspection_failed: "The browser could not provide a privacy inspection snapshot",
+  invalid_snapshot: "The browser returned incomplete or invalid privacy inspection data",
+  node_limit: "Privacy inspection exceeds the 100000-node page limit",
+  invalid_geometry: "The browser returned invalid element geometry for privacy masking",
+  secret_limit: "Protected values exceed the per-share privacy memory limits",
+  result_depth: "The result exceeds the privacy sanitizer nesting limit",
+  invalid_viewport: "The browser could not provide valid screenshot viewport geometry",
+  empty_clip: "The requested screenshot region is outside the visible viewport",
+  document_changed: "The document changed during screenshot capture",
+  viewport_changed: "The viewport changed during screenshot capture",
+  masks_changed: "Protected field or embedded-frame geometry changed during screenshot capture",
+  image_masking_failed: "The screenshot could not be decoded or masked safely",
+  image_limit: "The screenshot exceeds the privacy image size limits",
+  image_scale: "Screenshot dimensions do not match the inspected viewport",
+} as const;
+type PrivacyFailureReason = keyof typeof FAILURE_MESSAGES;
+const failures = new WeakMap<Error, PrivacyFailureReason>();
+const deny = (reason: PrivacyFailureReason = "invalid_snapshot") => {
+  const error = new DriverError(
     "privacy_denied",
-    "Privacy protection could not safely inspect or redact this page",
+    `Privacy protection: ${FAILURE_MESSAGES[reason]}`,
   );
+  failures.set(error, reason);
+  return error;
+};
+/** Only extension-owned categories may leave the guard; CDP errors can contain secrets. */
+export function privacyFailure(error: unknown): { reason: string; message: string } {
+  const reason = error instanceof Error ? failures.get(error) : undefined;
+  return {
+    reason: reason ?? "inspection_failed",
+    message: FAILURE_MESSAGES[reason ?? "inspection_failed"],
+  };
+}
+function safeFailure(error: unknown, fallback: PrivacyFailureReason): DriverError {
+  return error instanceof DriverError && failures.has(error) ? error : deny(fallback);
+}
 const finite = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value);
 function sparse(data: unknown): Map<number, unknown> {
@@ -62,7 +94,7 @@ function rectangle(value: unknown): MaskRect {
     Number(bounds[2]) < 0 ||
     Number(bounds[3]) < 0
   )
-    throw deny();
+    throw deny("invalid_geometry");
   return {
     x: Number(bounds[0]),
     y: Number(bounds[1]),
@@ -84,18 +116,19 @@ function intersect(a: MaskRect, b: MaskRect): MaskRect {
 /** Runs only in the extension worker. Original pixels never leave this function. */
 export const maskPng: MaskImage = async (png, clip, masks) => {
   if (typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined")
-    throw deny();
+    throw deny("image_masking_failed");
   const bitmap = await createImageBitmap(new Blob([new Uint8Array(png)], { type: "image/png" }));
   try {
-    if (!bitmap.width || !bitmap.height || bitmap.width * bitmap.height > 32_000_000) throw deny();
+    if (!bitmap.width || !bitmap.height || bitmap.width * bitmap.height > 32_000_000)
+      throw deny("image_limit");
     const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
     const context = canvas.getContext("2d");
-    if (!context) throw deny();
+    if (!context) throw deny("image_masking_failed");
     context.drawImage(bitmap, 0, 0);
     context.fillStyle = "#000000";
     const sx = bitmap.width / clip.width;
     const sy = bitmap.height / clip.height;
-    if (Math.abs(sx - sy) > Math.max(sx, sy) * 0.02) throw deny();
+    if (Math.abs(sx - sy) > Math.max(sx, sy) * 0.02) throw deny("image_scale");
     for (const mask of masks) {
       // Outward rounding + padding also covers borders and antialiased glyph edges.
       const padded = {
@@ -118,7 +151,7 @@ export const maskPng: MaskImage = async (png, clip, masks) => {
     const output = new Uint8Array(
       await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer(),
     );
-    if (output.byteLength > 4 * 1024 * 1024) throw deny();
+    if (output.byteLength > 4 * 1024 * 1024) throw deny("image_limit");
     return output;
   } finally {
     bitmap.close();
@@ -151,7 +184,7 @@ export class PrivacyGuard {
   }
   /** Remember before typing, even if page script immediately clears the field. */
   remember(value: string): void {
-    if (this.failed) throw deny();
+    if (this.failed) throw deny("secret_limit");
     if (!value || this.values.has(value)) return;
     const encoded = encoder.encode(value);
     if (
@@ -160,7 +193,7 @@ export class PrivacyGuard {
       encoded.byteLength > 16384
     ) {
       this.failed = true;
-      throw deny();
+      throw deny("secret_limit");
     }
     this.values.add(value);
     this.bytes += encoded.byteLength;
@@ -180,7 +213,7 @@ export class PrivacyGuard {
     this.replacement = undefined;
   }
   sanitize(value: unknown): unknown {
-    if (this.failed) throw deny();
+    if (this.failed) throw deny("secret_limit");
     if (!this.variants.size) return value;
     this.replacement ??= new RegExp(
       [...this.variants]
@@ -195,7 +228,7 @@ export class PrivacyGuard {
         .map((part) => part.replace(this.replacement as RegExp, REDACTED))
         .join(REDACTED);
     const visit = (item: unknown, depth: number): unknown => {
-      if (depth > 100) throw deny();
+      if (depth > 100) throw deny("result_depth");
       if (typeof item === "string") return replace(item);
       if (typeof item === "number" && [...this.values].some((v) => v === String(item)))
         return REDACTED;
@@ -209,7 +242,7 @@ export class PrivacyGuard {
     return visit(value, 0);
   }
   async scan(): Promise<void> {
-    if (this.failed) throw deny();
+    if (this.failed) throw deny("secret_limit");
     try {
       const snapshot = record(
         await this.cdp("DOMSnapshot.captureSnapshot", {
@@ -256,8 +289,8 @@ export class PrivacyGuard {
         const childDocuments = sparse(nodes.contentDocumentIndex);
         const sensitiveSelects = new Set<number>();
         totalNodes += names.length;
-        if (totalNodes > MAX_NODES || ids.length !== names.length || attrs.length !== names.length)
-          throw deny();
+        if (totalNodes > MAX_NODES) throw deny("node_limit");
+        if (ids.length !== names.length || attrs.length !== names.length) throw deny();
         const geometry = new Map<number, MaskRect[]>();
         const bounds = array(layout.bounds);
         const indexes = array(layout.nodeIndex);
@@ -328,13 +361,18 @@ export class PrivacyGuard {
         sensitiveIds,
         hasSensitive,
       };
-    } catch {
+    } catch (error) {
       this.state = undefined;
-      throw deny();
+      throw safeFailure(error, "inspection_failed");
     }
   }
   private async viewport(): Promise<ScreenshotClip> {
-    const result = record(await this.cdp("Page.getLayoutMetrics"));
+    let result: Record<string, unknown>;
+    try {
+      result = record(await this.cdp("Page.getLayoutMetrics"));
+    } catch {
+      throw deny("invalid_viewport");
+    }
     const viewport = record(result.cssVisualViewport);
     if (
       ![viewport.pageX, viewport.pageY, viewport.clientWidth, viewport.clientHeight].every(
@@ -343,7 +381,7 @@ export class PrivacyGuard {
       Number(viewport.clientWidth) <= 0 ||
       Number(viewport.clientHeight) <= 0
     )
-      throw deny();
+      throw deny("invalid_viewport");
     return {
       x: Number(viewport.pageX),
       y: Number(viewport.pageY),
@@ -361,20 +399,20 @@ export class PrivacyGuard {
     const before = this.state;
     if (!before) throw deny();
     const region = requestedClip ? intersect(requestedClip, viewport) : viewport;
-    if (!region.width || !region.height) throw deny();
+    if (!region.width || !region.height) throw deny("empty_clip");
     const clip = { ...region, scale: 1 };
     const png = await capture(clip);
     await this.scan();
     const after = this.state;
     const nextViewport = await this.viewport();
-    if (
-      !after ||
-      JSON.stringify(viewport) !== JSON.stringify(nextViewport) ||
-      before.frame !== after.frame ||
-      before.document !== after.document ||
-      JSON.stringify(before.masks) !== JSON.stringify(after.masks)
-    )
-      throw deny();
-    return this.maskImage(png, clip, after.masks);
+    if (!after || before.frame !== after.frame || before.document !== after.document)
+      throw deny("document_changed");
+    if (JSON.stringify(viewport) !== JSON.stringify(nextViewport)) throw deny("viewport_changed");
+    if (JSON.stringify(before.masks) !== JSON.stringify(after.masks)) throw deny("masks_changed");
+    try {
+      return await this.maskImage(png, clip, after.masks);
+    } catch (error) {
+      throw safeFailure(error, "image_masking_failed");
+    }
   }
 }

@@ -70,12 +70,12 @@ export async function packageStore(
 ): Promise<string> {
   const origin = releaseOrigin(options.origin ?? process.env.REMOTE_TAB_SERVER_ORIGIN);
   const output = resolve(
-    options.output ?? join(import.meta.dir, `../../dist/bean-tab-share-${EXTENSION_VERSION}.zip`),
+    options.output ?? join(import.meta.dir, `../../dist/remote-tab-${EXTENSION_VERSION}.zip`),
   );
   const force = options.force ?? false;
   await checkOutput(output, force);
   await mkdir(dirname(output), { recursive: true });
-  const temporary = await mkdtemp(join(dirname(output), ".bean-tab-share-"));
+  const temporary = await mkdtemp(join(dirname(output), ".remote-tab-"));
   try {
     const built = join(temporary, "extension");
     // A fresh compiler process also isolates Bun's module/file caches from

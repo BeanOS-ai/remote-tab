@@ -33,7 +33,7 @@ function checkEntries(ledger: Ledger): void {
   let last = 0;
   for (const entry of ledger.entries) {
     if (!Number.isSafeInteger(entry.message.seq) || entry.message.seq <= last)
-      throw new Error("Ledger entries must have increasing positive sequence numbers");
+      throw new Error("Interaction summary entries must have increasing positive sequence numbers");
     last = entry.message.seq;
   }
 }
@@ -56,10 +56,11 @@ export function makeLedgerZip(ledger: ExtensionLedger): Uint8Array {
   const files: { name: string; bytes: Uint8Array }[] = [];
   let size = 0;
   const add = (name: string, bytes: Uint8Array) => {
-    if (!(bytes instanceof Uint8Array)) throw new Error("Ledger attachment must contain bytes");
-    if (files.length >= MAX_FILES) throw new Error("Ledger ZIP exceeds 10000 files");
+    if (!(bytes instanceof Uint8Array))
+      throw new Error("Interaction summary attachment must contain bytes");
+    if (files.length >= MAX_FILES) throw new Error("Interaction summary ZIP exceeds 10000 files");
     size += bytes.byteLength + 76 + encoder.encode(name).byteLength * 2;
-    if (size + 22 > MAX_BYTES) throw new Error("Ledger ZIP exceeds 256 MiB");
+    if (size + 22 > MAX_BYTES) throw new Error("Interaction summary ZIP exceeds 256 MiB");
     files.push({ name, bytes });
   };
   const entries = ledger.entries.map((entry) => ({

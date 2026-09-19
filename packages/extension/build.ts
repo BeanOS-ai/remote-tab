@@ -65,12 +65,13 @@ export async function buildExtension(
     `${JSON.stringify(
       {
         manifest_version: 3,
-        name: "Bean Tab Share",
+        name: "Remote Tab",
+        short_name: "Remote Tab",
         version: EXTENSION_VERSION,
         minimum_chrome_version: "125",
         description:
           "Share one tab with your agent. You control the mode, site scope, and when sharing stops.",
-        permissions: ["tabs", "debugger"],
+        permissions: ["tabs", "debugger", "notifications"],
         host_permissions: [`${configuredOrigin}/*`],
         background: { service_worker: "worker.js", type: "module" },
         action: { default_popup: "popup.html", default_icon: icons },
