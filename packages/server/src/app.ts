@@ -415,7 +415,7 @@ export function createApp(opts: AppOptions): {
         const a = await authSession(ctx, id, ["agent", "browser"]);
         if (a instanceof Response) return a;
         const after = Number(url.searchParams.get("after") ?? "0");
-        if (!Number.isInteger(after) || after < 0)
+        if (!Number.isSafeInteger(after) || after < 0)
           return fail(400, "invalid", "after must be a non-negative integer");
         const wait = Math.min(
           Number(url.searchParams.get("wait") ?? "0") || 0,
@@ -423,7 +423,7 @@ export function createApp(opts: AppOptions): {
         );
         let messages = await store.listMessages(id, after, 200);
         if (messages.length === 0 && wait > 0 && a.session.state === "active") {
-          await store.waitForMessage(id, after, wait * 1000);
+          await store.waitForMessage(id, after, wait * 1000, req.signal);
           messages = await store.listMessages(id, after, 200);
         }
         const fresh = await store.getSession(id);

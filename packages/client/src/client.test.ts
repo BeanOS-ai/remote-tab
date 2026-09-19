@@ -30,7 +30,7 @@ const hello: Hello = {
 };
 const quick = { pollWaitSeconds: 0, pollIntervalMs: 1, timeoutMs: 2_000 };
 function setup(now?: () => number) {
-  const store = new MemoryStore();
+  const store = new MemoryStore(now ? () => new Date(now()) : undefined);
   const app = createApp({
     store,
     keyResolver: new StaticKeyResolver(new Map([["test", apiKey]]), { defaultQps: 0 }),

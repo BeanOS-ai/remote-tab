@@ -1,8 +1,6 @@
 # Optional GCP store contract
 
-This is the approved-design target for the adapter implementation that follows
-this document. The default server uses `MemoryStore`; no cloud service is
-required. `REMOTE_TAB_STORE=gcp` opts into `packages/store-gcp` using the official
+The default server uses `MemoryStore`; no cloud service is required. `REMOTE_TAB_STORE=gcp` opts into `packages/store-gcp` using the official
 `@google-cloud/firestore` client and Application Default Credentials. Select a
 Firestore database with `REMOTE_TAB_FIRESTORE_DATABASE` (default `(default)`)
 and a blob bucket with `REMOTE_TAB_GCS_BUCKET`. Unknown store names fail startup.
@@ -94,3 +92,11 @@ References: [Firestore transactions](https://docs.cloud.google.com/firestore/nat
 [Firestore TTL](https://firebase.google.com/docs/firestore/ttl),
 [GCS lifecycle](https://docs.cloud.google.com/storage/docs/lifecycle), and
 [emulator setup](https://docs.cloud.google.com/firestore/native/docs/emulator).
+
+## Dependency compatibility
+
+The workspace pins the Firestore client and Google authentication library. Two
+small Bun patches to transitive Gaxios declarations describe its `fetch` method
+as a callable Fetch API function, rather than requiring Bun's static
+`fetch.preconnect` helper. They change no runtime code. Full declaration and
+source checking remain enabled; reevaluate the patches when updating Gaxios.

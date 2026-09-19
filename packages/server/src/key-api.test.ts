@@ -283,7 +283,7 @@ test("key-policy refresh crossing expiry cannot authorize messages or blobs and 
     let now = start;
     let expireDuringRefresh = false;
     const claims = { subject: "account", tier: "test", qps: 0 };
-    const store = new MemoryStore();
+    const store = new MemoryStore(() => new Date(now));
     const app = createApp({
       store,
       anonymousQps: 0,

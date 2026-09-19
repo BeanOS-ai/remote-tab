@@ -166,7 +166,7 @@ for (const terminal of ["stopped", "expired"] as const) {
   test(`a ${terminal} message page cannot relabel an earlier active ledger snapshot as final`, async () => {
     let now = Date.now();
     const app = createApp({
-      store: new MemoryStore(),
+      store: new MemoryStore(() => new Date(now)),
       keyResolver: new StaticKeyResolver(new Map([["race", "test-key"]]), { defaultQps: 0 }),
       anonymousQps: 0,
       now: () => new Date(now),

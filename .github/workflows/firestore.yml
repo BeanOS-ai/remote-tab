@@ -1,0 +1,64 @@
+name: firestore
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  firestore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          version: '585.0.0'
+          install_components: cloud-firestore-emulator
+      - run: bun install --frozen-lockfile
+      - name: Firestore emulator contract and listener tests
+        env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
+          GOOGLE_CLOUD_PROJECT: demo-remote-tab-ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          emulator_log="$RUNNER_TEMP/firestore-emulator.log"
+          gcloud emulators firestore start \
+            --host-port="$FIRESTORE_EMULATOR_HOST" \
+            --project="$GOOGLE_CLOUD_PROJECT" \
+            --quiet >"$emulator_log" 2>&1 &
+          emulator_pid=$!
+          cleanup() {
+            status=$?
+            curl --silent --output /dev/null --max-time 5 --request POST \
+              "http://$FIRESTORE_EMULATOR_HOST/shutdown" || true
+            kill "$emulator_pid" 2>/dev/null || true
+            if [ "$status" -ne 0 ]; then cat "$emulator_log"; fi
+          }
+          trap cleanup EXIT
+          ready=false
+          for attempt in $(seq 1 60); do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then
+              echo 'Firestore emulator exited before becoming ready' >&2
+              exit 1
+            fi
+            if curl --silent --output /dev/null --connect-timeout 1 --max-time 1 \
+              "http://$FIRESTORE_EMULATOR_HOST/"; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" != true ]; then
+            echo 'Firestore emulator did not become ready within the startup bound' >&2
+            exit 1
+          fi
+          bun test packages/store-gcp/src/firestore-store.test.ts --timeout 60000

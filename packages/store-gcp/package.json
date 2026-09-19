@@ -1,0 +1,12 @@
+{
+  "name": "@remote-tab/store-gcp",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "dependencies": {
+    "@google-cloud/firestore": "9.2.0",
+    "@remote-tab/protocol": "workspace:*",
+    "@remote-tab/server": "workspace:*",
+    "google-auth-library": "11.1.0"
+  }
+}

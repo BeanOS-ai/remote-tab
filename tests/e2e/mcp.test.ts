@@ -20,7 +20,7 @@ function payload(result: CallToolResult) {
 async function fixture(options: ClientOptions = {}) {
   let now = Date.now();
   const app = createApp({
-    store: new MemoryStore(),
+    store: new MemoryStore(() => new Date(now)),
     keyResolver: new StaticKeyResolver(new Map([["e2e", "test-key"]]), { defaultQps: 0 }),
     anonymousQps: 0,
     now: () => new Date(now),
