@@ -1,13 +1,13 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Bean Tab Share</title><link rel="stylesheet" href="style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Remote Tab</title><link rel="stylesheet" href="style.css"></head>
 <body>
 <header>
-  <div class="brand"><img src="bean-creature.svg" width="42" height="39" alt="BeanOS"><div><h1>Bean Tab Share</h1><span class="tagline">Your tab. Your control.</span></div></div>
+  <div class="brand"><img src="bean-creature.svg" width="42" height="39" alt="BeanOS"><div><h1>Remote Tab</h1><span class="tagline">Your tab. Your control.</span></div></div>
   <button id="stop" class="danger" type="button" disabled>Stop</button>
 </header>
 <main>
-  <div class="tab-card"><div class="card-heading"><span class="eyebrow">THIS TAB</span><span id="share-status" class="status" data-state="ready">Ready to share</span></div><p id="tab"></p></div>
+  <div class="tab-card"><div class="card-heading"><span id="tab-label" class="eyebrow">THIS TAB</span><span id="share-status" class="status" data-state="ready">Ready to share</span></div><p id="tab"></p><p id="shared-tab-status" role="status" hidden></p><button id="focus-shared" class="secondary" type="button" hidden>Go to shared tab</button></div>
   <form id="consent" novalidate>
     <label class="field-label" for="code">Private code from your agent</label>
     <input id="code" type="password" placeholder="Paste rt1.…" autocomplete="off" spellcheck="false" required aria-describedby="code-hint">
@@ -18,7 +18,7 @@
       <label class="mode"><input type="radio" name="mode" value="full"><span><strong>Full</strong><small>Run scripts</small></span></label>
     </div></fieldset>
     <label class="site-option"><input type="checkbox" id="site" checked><span>This site only</span></label>
-    <button id="share" class="primary" type="submit">Share this tab <span aria-hidden="true">→</span></button>
+    <button id="share" class="primary" type="submit"><span id="share-label">Read my tab</span><span aria-hidden="true">→</span></button>
   </form>
   <section id="live" hidden aria-label="Sharing controls">
     <div class="session-info"><p id="state"></p><p id="expiry"></p></div>
@@ -29,13 +29,13 @@
     <div class="activity"><h2>Recent activity</h2><ol id="feed" aria-live="polite"></ol></div>
   </section>
   <p id="error" role="status"></p>
-  <button id="open-ledger" class="secondary" type="button" hidden>View ledger</button>
+  <button id="open-ledger" class="secondary" type="button" hidden>View interaction summary</button>
   <details><summary>Details</summary><div class="details-content">
-    <p>Only this tab is shared. Use <strong>Pause agent</strong> before working alongside your agent; typing, clicking and navigating do not pause it automatically. <strong>Stop</strong> ends sharing.</p>
-    <p>Chrome’s debugging bar means the agent can control this tab. Dismissing it ends sharing.</p>
+    <p>Only the tab shown above is shared. Use <strong>Pause agent</strong> before working alongside your agent; typing, clicking and navigating do not pause it automatically. <strong>Stop</strong> ends sharing.</p>
+    <p>Chrome’s debugging bar means the agent can control the shared tab. Dismissing it ends sharing.</p>
     <p>Password, one-time-code and payment fields are private. After protected fields are encountered, scripting and console/network inspection stay unavailable for this share.</p>
   </div></details>
 </main>
-<footer><span>Made with BeanOS</span><a href="https://beanos.ai/remote-tab" target="_blank" rel="noopener noreferrer">Details and help <span aria-hidden="true">↗</span></a></footer>
+<footer><span>by BeanOS.ai</span><a href="https://beanos.ai/remote-tab" target="_blank" rel="noopener noreferrer">Details and help <span aria-hidden="true">↗</span></a></footer>
 <script src="popup.js" type="module"></script>
 </body></html>

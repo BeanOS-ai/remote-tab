@@ -1,5 +1,5 @@
 import type { Mode } from "@remote-tab/protocol";
-import type { PrivacyGuard, ScreenshotClip } from "./privacy";
+import { type PrivacyGuard, type ScreenshotClip, privacyFailure } from "./privacy";
 import { isWithinScope } from "./scope";
 
 export type Cdp = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
@@ -204,6 +204,9 @@ export class TabDriver {
     if (rec(tree.frame).url) this.url = String(rec(tree.frame).url);
     this.checkUrl(this.url);
     await this.scanPrivacy();
+  }
+  isMainFrame(frameId: unknown): boolean {
+    return frameId === this.frameId;
   }
   private clearDocument(): void {
     this.contextId = undefined;
@@ -795,25 +798,48 @@ export class TabDriver {
     }
     if (isActing(tool)) await this.waitForNavigation();
     if (this.scopeError) throw this.scopeError;
-    await this.scanPrivacy();
-    this.checkPrivateTool(tool);
-    result = renderSnapshot ? renderSnapshot() : this.sanitizeOutput(tool, result);
-    result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
-    const screenshot = isActing(tool) ? await this.screenshot() : undefined;
-    this.checkPrivateTool(tool);
-    // Screenshot scans can discover newly filled fields. Scrub once more before
-    // constructing any transport payload, with all discovered values available.
-    if (screenshot) result = this.sanitizeOutput(tool, result);
-    const bytes = encoder.encode(JSON.stringify(result));
-    const output: DriverResult =
-      bytes.length > MAX_LOG
-        ? {
-            result: { attached: "application/json" },
-            blobs: [{ bytes, mimeType: "application/json" }],
-          }
-        : { result };
-    if (screenshot) output.screenshot = screenshot;
-    if (this.scopeError) throw this.scopeError;
-    return output;
+    try {
+      await this.scanPrivacy();
+      this.checkPrivateTool(tool);
+      result = renderSnapshot ? renderSnapshot() : this.sanitizeOutput(tool, result);
+      result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
+      const screenshot = isActing(tool) ? await this.screenshot() : undefined;
+      this.checkPrivateTool(tool);
+      // Screenshot scans can discover newly filled fields. Scrub once more before
+      // constructing any transport payload, with all discovered values available.
+      if (screenshot) result = this.sanitizeOutput(tool, result);
+      const bytes = encoder.encode(JSON.stringify(result));
+      const output: DriverResult =
+        bytes.length > MAX_LOG
+          ? {
+              result: { attached: "application/json" },
+              blobs: [{ bytes, mimeType: "application/json" }],
+            }
+          : { result };
+      if (screenshot) output.screenshot = screenshot;
+      if (this.scopeError) throw this.scopeError;
+      return output;
+    } catch (error) {
+      // The preflight scan above still refuses before either navigation command.
+      // Here navigation has completed: omit every page-derived value and raw
+      // pixel instead of reporting a refusal after changing the human's tab.
+      if (
+        (tool === "browser_navigate" || tool === "browser_navigate_back") &&
+        error instanceof DriverError &&
+        error.code === "privacy_denied" &&
+        !this.scopeError
+      ) {
+        this.clearDiagnostics();
+        return {
+          result: {
+            ok: true,
+            navigated: true,
+            content_unavailable: "privacy",
+            ...privacyFailure(error),
+          },
+        };
+      }
+      throw error;
+    }
   }
 }

@@ -17,5 +17,29 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: Install pinned Playwright Chromium and system dependencies
         run: bun tests/browser/node_modules/playwright/cli.js install --with-deps chromium
+      - name: Real Chromium isolated handoff security and screenshots
+        run: bun tests/browser/handoff.mjs
+        env:
+          HANDOFF_SCREENSHOTS: artifacts/handoff
+      - name: Real Chromium navigation failure semantics
+        run: bun tests/browser/navigation.mjs
+      - name: Real Chromium popup rendering and interaction
+        run: PLAYWRIGHT_MODULE="$GITHUB_WORKSPACE/tests/browser/node_modules/playwright/index.mjs" bun scripts/extension-popup-smoke.mjs
+        env:
+          POPUP_SCREENSHOT_DIR: artifacts/popup
       - name: Real Chromium MV3 extension tests
         run: bun run test:browser
+      - name: Upload handoff screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: handoff-screenshots
+          path: artifacts/handoff/*.png
+          if-no-files-found: ignore
+      - name: Upload popup screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: popup-screenshots
+          path: artifacts/popup/*.png
+          if-no-files-found: ignore

@@ -207,7 +207,7 @@ test("local human controls reject invalid actions, timestamps and unbounded meta
     Array.from({ length: MAX_CONTROL_EVENTS + 1 }, () => pause),
   ]) {
     expect(() => jobs.create(peer, Promise.resolve(), invalidControls as ControlEvent[])).toThrow(
-      "Ledger verification failed",
+      "Interaction summary verification failed",
     );
   }
   const controls = Array.from({ length: MAX_CONTROL_EVENTS }, () => pause) as ControlEvent[];
@@ -353,7 +353,7 @@ test("count, TTL and aggregate memory bounds fail clearly and release frees capa
   const ledger = await fixture();
   const jobs = new LedgerJobs({ now: () => now, ttlMs: 100, maxJobs: 1 });
   const id = create(jobs, ledger);
-  expect(() => create(jobs, ledger)).toThrow("Other ledgers");
+  expect(() => create(jobs, ledger)).toThrow("Other interaction summaries");
   await ready(jobs, id);
   now = 101;
   expect(jobs.status(id)).toMatchObject({ state: "error", code: "ledger_unavailable" });
@@ -401,7 +401,7 @@ test("release while fetching cannot republish the job; errors never echo transpo
     }),
   ).rejects.toMatchObject({
     code: "ledger_unavailable",
-    message: "This ledger is no longer available in memory.",
+    message: "This interaction summary is no longer available in memory.",
   });
 });
 

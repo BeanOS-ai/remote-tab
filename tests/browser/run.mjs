@@ -108,6 +108,75 @@ async function share(tab, mode) {
 async function clickControl(popup, id) {
   await popup.locator(`#${id}`).evaluate((button) => button.click());
 }
+async function attentionState(pending) {
+  return worker.evaluate(async (pending) => {
+    const until = Date.now() + 5000;
+    let state;
+    do {
+      state = {
+        badge: await chrome.action.getBadgeText({}),
+        title: await chrome.action.getTitle({}),
+        notifications: await chrome.notifications.getAll(),
+      };
+      if (
+        state.badge === (pending ? "!" : "") &&
+        Boolean(state.notifications["remote-tab-handoff"]) === pending
+      )
+        return state;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    } while (Date.now() < until);
+    return state;
+  }, pending);
+}
+async function handoffControlPosition(tab) {
+  return worker.evaluate(async (url) => {
+    const tab = (await chrome.tabs.query({})).find((tab) => tab.url === url);
+    const target = { tabId: tab.id };
+    await chrome.debugger.sendCommand(target, "DOM.enable");
+    const { nodes } = await chrome.debugger.sendCommand(target, "DOM.getFlattenedDocument", {
+      depth: -1,
+      pierce: true,
+    });
+    const host = nodes.find((node) => node.attributes?.includes("remote-tab-handoff"));
+    if (!host?.shadowRoots?.length) throw new Error("Installed worker handoff shadow root missing");
+    // Resolve only descendants of the actual handoff host, not page-authored buttons.
+    const parents = new Map(nodes.map((node) => [node.nodeId, node.parentId]));
+    const descendants = nodes.filter((node) => {
+      let id = node.nodeId;
+      while (id && id !== host.shadowRoots[0].nodeId) id = parents.get(id);
+      return Boolean(id);
+    });
+    const controls = [];
+    for (const node of descendants.filter((node) => node.nodeName === "BUTTON")) {
+      const { object } = await chrome.debugger.sendCommand(target, "DOM.resolveNode", {
+        nodeId: node.nodeId,
+      });
+      try {
+        const { result } = await chrome.debugger.sendCommand(target, "Runtime.callFunctionOn", {
+          objectId: object.objectId,
+          functionDeclaration: `function(){
+            const r = this.getBoundingClientRect();
+            if(!r.width || !r.height) return null;
+            const host = this.getRootNode().host.getBoundingClientRect();
+            return { label:this.textContent, x:r.x+r.width/2, y:r.y+r.height/2,
+              hostX:host.x, hostY:host.y };
+          }`,
+          returnByValue: true,
+        });
+        if (result.value) controls.push(result.value);
+      } finally {
+        await chrome.debugger.sendCommand(target, "Runtime.releaseObject", {
+          objectId: object.objectId,
+        });
+      }
+    }
+    // Prefer the old vulnerable Done if present: the regression must exercise
+    // clickjacking on a reverted build, not fail merely because a label changed.
+    const control = controls.find((control) => control.label === "Done") || controls[0];
+    if (!control) throw new Error("Installed worker handoff presentation control missing");
+    return control;
+  }, tab.url());
+}
 async function stop(tab, popup, session) {
   const ledgerReady = context.waitForEvent("page", {
     predicate: (page) => page.url().includes("ledger.html"),
@@ -235,8 +304,59 @@ try {
     tab.on("pageerror", (error) => failures.push(error.message));
     await tab.goto(`${origin}/form`);
     report("MV3 worker and local form loaded");
-    const { session, popup } = await share(tab, "act");
+    const shared = await share(tab, "act");
+    const session = shared.session;
+    let popup = shared.popup;
     report("authenticated act hello");
+    const sharedTarget = await worker.evaluate(async (url) => {
+      const target = (await chrome.tabs.query({})).find((candidate) => candidate.url === url);
+      return { tabId: target.id, windowId: target.windowId };
+    }, tab.url());
+    const otherPopupReady = context.waitForEvent("page");
+    const popupWindow = await worker.evaluate(
+      (url) => chrome.windows.create({ url, focused: true, type: "normal" }),
+      `chrome-extension://${new URL(worker.url()).host}/popup.html`,
+    );
+    try {
+      assert.notEqual(popupWindow.id, sharedTarget.windowId);
+      const otherPopup = await otherPopupReady;
+      await otherPopup.waitForLoadState();
+      await otherPopup.locator("#live").waitFor({ state: "visible" });
+      assert.equal(await otherPopup.locator("#tab-label").innerText(), "SHARED TAB");
+      assert.equal(
+        await otherPopup.locator("#tab").innerText(),
+        `Remote Tab offline fixture\n${origin}`,
+      );
+      await otherPopup.locator("#focus-shared").waitFor({ state: "visible" });
+      assert.equal(
+        await worker.evaluate(async (id) => (await chrome.windows.get(id)).focused, popupWindow.id),
+        true,
+      );
+      await otherPopup.locator("#focus-shared").click();
+      const focused = await worker.evaluate(async ({ tabId, windowId }) => {
+        const until = Date.now() + 5000;
+        let state;
+        do {
+          const tab = await chrome.tabs.get(tabId);
+          const window = await chrome.windows.get(windowId);
+          state = { active: tab.active, tabWindowId: tab.windowId, focused: window.focused };
+          if (state.active && state.focused) return state;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        } while (Date.now() < until);
+        return state;
+      }, sharedTarget);
+      assert.deepEqual(focused, {
+        active: true,
+        tabWindowId: sharedTarget.windowId,
+        focused: true,
+      });
+      assert.equal(popup.isClosed(), false, "The original extension popup remains available");
+    } finally {
+      await worker.evaluate((id) => chrome.windows.remove(id), popupWindow.id);
+    }
+    report(
+      "production popup in another window identifies the shared tab and focuses its original window",
+    );
     const snapshot = await session.send("browser_snapshot");
     assert.equal(snapshot.ok, true);
     const name = refFor(snapshot.result.text, "Name");
@@ -267,13 +387,148 @@ try {
       handedOff = true;
     });
     await popup.locator("#handoff").waitFor({ state: "visible" });
+    await popup.close();
+    await tab.bringToFront();
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "visible" });
+    const pendingAttention = await attentionState(true);
+    assert.equal(pendingAttention.badge, "!");
+    assert.match(pendingAttention.title, /your turn.*waiting/i);
+    assert.equal(pendingAttention.notifications["remote-tab-handoff"], true);
+    assert.equal(
+      await tab.evaluate(() => {
+        const host = document.querySelector("#remote-tab-handoff");
+        host.click();
+        host.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        host.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        window.postMessage({ type: "remote-tab-handoff-done" }, "*");
+        return host.shadowRoot;
+      }),
+      null,
+      "The ordinary page cannot access the installed worker's closed handoff shadow root",
+    );
     assert.equal(handedOff, false);
     await assert.rejects(
       AgentSession.resume(session.exportState(), options).send("browser_click", { ref: submit }),
       { code: "handoff_pending" },
     );
-    await clickControl(popup, "done");
+    for (const attack of ["transparent", "hidden", "top-layer-cover", "top-layer-decoy"]) {
+      const control = await handoffControlPosition(tab);
+      const point = { x: 320, y: 180 };
+      await tab.evaluate(
+        ({ attack, control, point }) => {
+          const host = document.querySelector("#remote-tab-handoff");
+          const originalStyle = host.style.cssText;
+          const play = document.createElement("button");
+          play.id = "page-play-video";
+          play.textContent = "Play video";
+          play.style.cssText = `position:fixed;left:${point.x - 90}px;top:${point.y - 30}px;
+            width:180px;height:60px;z-index:2147483647;background:white;color:black`;
+          document.body.append(play);
+          // Page-world code can restyle and reposition the host without access
+          // to its closed shadow root. Scale also enlarges its hidden hit target.
+          const scale = 1.4;
+          const dx = point.x - control.hostX - (control.x - control.hostX) * scale;
+          const dy = point.y - control.hostY - (control.y - control.hostY) * scale;
+          host.style.setProperty("transform-origin", "0 0", "important");
+          host.style.setProperty(
+            "transform",
+            `translate(${dx}px,${dy}px) scale(${scale})`,
+            "important",
+          );
+          host.style.setProperty("opacity", attack === "transparent" ? "0" : "1", "important");
+          host.style.setProperty(
+            "visibility",
+            attack === "hidden" ? "hidden" : "visible",
+            "important",
+          );
+          const attackStyle = host.style.cssText;
+          // Keep page styling in force across the banner's periodic repair.
+          const observer = new MutationObserver(() => {
+            if (host.style.cssText !== attackStyle) host.style.cssText = attackStyle;
+          });
+          observer.observe(host, { attributes: true, attributeFilter: ["style"] });
+          let cover;
+          if (attack.startsWith("top-layer")) {
+            cover = document.createElement("div");
+            cover.id = "page-video-cover";
+            cover.setAttribute("popover", "manual");
+            cover.textContent = "Play video";
+            cover.style.cssText = `position:fixed;inset:auto;margin:0;
+              left:${point.x - 90}px;top:${point.y - 30}px;width:180px;height:60px;
+              background:white;color:black;border:0;pointer-events:${attack === "top-layer-decoy" ? "none" : "auto"}`;
+            document.body.append(cover);
+            cover.showPopover();
+          }
+          window.handoffAttackClicks = [];
+          const capture = (event) =>
+            window.handoffAttackClicks.push({
+              trusted: event.isTrusted,
+              target: event.target.id,
+            });
+          document.addEventListener("click", capture, true);
+          window.cleanupHandoffAttack = () => {
+            observer.disconnect();
+            host.style.cssText = originalStyle;
+            document.removeEventListener("click", capture, true);
+            play.remove();
+            cover?.remove();
+            window.cleanupHandoffAttack = undefined;
+          };
+        },
+        { attack, control, point },
+      );
+      try {
+        const expectedTarget =
+          attack === "hidden"
+            ? "page-play-video"
+            : attack === "top-layer-cover"
+              ? "page-video-cover"
+              : "remote-tab-handoff";
+        assert.equal(
+          await tab.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id, point),
+          expectedTarget,
+          `${attack} must position the intended click target`,
+        );
+        await tab.mouse.click(point.x, point.y);
+        assert.deepEqual(
+          await tab.evaluate(() => window.handoffAttackClicks),
+          [{ trusted: true, target: expectedTarget }],
+          `${attack} must deliver a real trusted click`,
+        );
+        await assert.rejects(
+          AgentSession.resume(session.exportState(), options).send("browser_click", {
+            ref: submit,
+          }),
+          { code: "handoff_pending" },
+          `${attack} must not unblock agent commands`,
+        );
+        assert.equal(handedOff, false, `${attack} must not acknowledge handoff`);
+        assert.equal((await attentionState(true)).badge, "!");
+      } finally {
+        await tab.evaluate(() => window.cleanupHandoffAttack());
+      }
+    }
+    popup = await popupFor(tab);
+    await popup.locator("#handoff").waitFor({ state: "visible" });
+    await popup.bringToFront();
+    await popup.locator("#done").click();
     await handoff;
+    assert.equal(handedOff, true);
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "detached" });
+    const clearedAttention = await attentionState(false);
+    assert.equal(clearedAttention.badge, "");
+    assert.equal(clearedAttention.title, "Remote Tab");
+    assert.equal(clearedAttention.notifications["remote-tab-handoff"], undefined);
+    report(
+      "closed-popup handoff: page restyling, hidden/moved/resized host and top-layer clickjacking cannot acknowledge; trusted extension popup Done clears attention",
+    );
+    const nextHandoff = session.handoff("Review again, then use the extension Done button");
+    await popup.locator("#handoff").waitFor({ state: "visible" });
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "visible" });
+    await popup.locator("#done").click();
+    await nextHandoff;
+    await tab.locator("#remote-tab-handoff").waitFor({ state: "detached" });
+    assert.equal((await attentionState(false)).badge, "");
     await tab.bringToFront();
     await tab.locator("#name").click();
     await tab.keyboard.press("ArrowLeft");

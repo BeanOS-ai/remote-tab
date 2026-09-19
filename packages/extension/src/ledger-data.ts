@@ -32,11 +32,12 @@ export class LedgerTransferError extends Error {
   ) {
     super(
       {
-        ledger_unavailable: "This ledger is no longer available in memory.",
-        ledger_invalid: "Ledger verification failed. No export was created.",
-        ledger_too_large: "This ledger exceeds the viewer's memory limit.",
-        ledger_busy: "Other ledgers are still loading. Close a viewer and retry.",
-        ledger_timeout: "Ledger loading timed out. Retry while the share remains available.",
+        ledger_unavailable: "This interaction summary is no longer available in memory.",
+        ledger_invalid: "Interaction summary verification failed. No export was created.",
+        ledger_too_large: "This interaction summary exceeds the viewer's memory limit.",
+        ledger_busy: "Other interaction summaries are still loading. Close a viewer and retry.",
+        ledger_timeout:
+          "Interaction summary loading timed out. Retry while the share remains available.",
       }[code],
     );
     this.name = "LedgerTransferError";

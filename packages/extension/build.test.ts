@@ -27,11 +27,11 @@ test("browser bundle and manifest share one origin with no broad or legacy hosts
   try {
     await buildExtension("https://configured.example", out);
     const manifest = await Bun.file(`${out}/manifest.json`).json();
-    expect(manifest.name).toBe("Bean Tab Share");
+    expect(manifest.name).toBe("Remote Tab");
     expect(manifest.version).toBe(
       (await Bun.file(`${import.meta.dir}/package.json`).json()).version,
     );
-    expect(manifest.permissions).toEqual(["tabs", "debugger"]);
+    expect(manifest.permissions).toEqual(["tabs", "debugger", "notifications"]);
     expect(manifest.icons).toEqual({
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",

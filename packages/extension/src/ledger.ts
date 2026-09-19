@@ -272,7 +272,8 @@ gifButton.onclick = async () => {
 };
 async function start() {
   try {
-    if (!jobId) throw new Error("This ledger page has no history job. Open it from Remote Tab.");
+    if (!jobId)
+      throw new Error("This interaction summary has no history job. Open it from Remote Tab.");
     const verified = await loadLedger(jobId, (message) => chrome.runtime.sendMessage(message));
     showLedger(verified);
     ledger = verified;

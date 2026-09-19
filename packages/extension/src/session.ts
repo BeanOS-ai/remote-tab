@@ -44,6 +44,10 @@ export class SharedSession {
     readonly detach: () => Promise<void>,
     hello: Hello,
     private readonly onStop?: StopObserver,
+    private readonly onHandoff?: (
+      handoff: ShareState["handoff"],
+      expiresAt: string,
+    ) => void | Promise<void>,
   ) {
     this.state = {
       sharing: true,
@@ -66,6 +70,7 @@ export class SharedSession {
       detach: () => Promise<void>;
       isCancelled?: () => boolean;
       onStop?: StopObserver;
+      onHandoff?: (handoff: ShareState["handoff"], expiresAt: string) => void | Promise<void>;
     },
   ) {
     if (!parseCode(options.code)) throw new Error("Paste a valid rt1. code from your agent");
@@ -76,6 +81,7 @@ export class SharedSession {
       options.detach,
       options.hello,
       options.onStop,
+      options.onHandoff,
     );
     try {
       share.state.expiresAt = (await peer.status()).expires_at;
@@ -124,6 +130,7 @@ export class SharedSession {
         if (this.abort.signal.aborted) break;
         if (command.kind === "handoff") {
           this.state.handoff = { id: command.id, message: command.message };
+          this.onHandoff?.(this.state.handoff, this.state.expiresAt ?? "");
           this.state.paused = true;
           this.driver.setPaused(true);
           this.log("Your agent needs you. Click Done when finished.");
@@ -225,6 +232,7 @@ export class SharedSession {
   }
   pause() {
     if (!this.state.sharing) return;
+    this.onHandoff?.(undefined, this.state.expiresAt ?? "");
     this.pauseEpoch++;
     this.driver.setPaused(true);
     this.state.paused = true;
@@ -249,23 +257,27 @@ export class SharedSession {
     if (this.handoffDelivery) return this.handoffDelivery;
     const epoch = this.pauseEpoch;
     this.commandPoll?.abort();
-    const delivery = this.peer.handoffDone(handoff.id);
+    const delivery = (async () => {
+      await this.peer.handoffDone(handoff.id);
+      if (!this.state.sharing) return;
+      this.state.handoff = undefined;
+      // Keep the command loop blocked until attention UI has been removed, so
+      // the next snapshot/action cannot see or hit extension controls.
+      await this.onHandoff?.(undefined, this.state.expiresAt ?? "");
+      if (!this.state.sharing || epoch !== this.pauseEpoch) return;
+      this.state.paused = false;
+      this.driver.setPaused(false);
+      this.state.notice = undefined;
+      this.log("Handoff complete; agent resumed");
+    })();
     this.handoffDelivery = delivery;
     try {
       await delivery;
     } finally {
       if (this.handoffDelivery === delivery) this.handoffDelivery = undefined;
     }
-    if (!this.state.sharing) return;
-    this.state.handoff = undefined;
-    if (epoch !== this.pauseEpoch) {
-      return;
-    }
-    this.state.paused = false;
-    this.driver.setPaused(false);
-    this.state.notice = undefined;
-    this.log("Handoff complete; agent resumed");
   }
+
   async extend() {
     if (!this.state.sharing) throw new Error("Sharing has ended");
     const status = await this.peer.extend();
@@ -285,6 +297,8 @@ export class SharedSession {
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;
     this.state.sharing = false;
+    this.state.handoff = undefined;
+    this.onHandoff?.(undefined, this.state.expiresAt ?? "");
     this.log("Sharing stopped");
     this.abort.abort();
     clearTimeout(this.expiryTimer);
@@ -304,7 +318,8 @@ export class SharedSession {
     try {
       if (this.started) this.onStop?.(this, this.stopping);
     } catch {
-      this.state.notice = "Sharing stopped. Open the ledger from the popup to save your history.";
+      this.state.notice =
+        "Sharing stopped. Open the interaction summary from the popup to save your history.";
     }
     return this.stopping;
   }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { type Cdp, TabDriver } from "./driver";
-import { type MaskRect, PrivacyGuard, type ScreenshotClip } from "./privacy";
+import { type MaskRect, PrivacyGuard, type ScreenshotClip, privacyFailure } from "./privacy";
 
 interface Field {
   name?: string;
@@ -229,12 +229,182 @@ describe("privacy guard", () => {
       expect(f.masks).toHaveLength(0);
     },
   );
-  test("scan failure never leaks underlying CDP error details", async () => {
+  test("scan failure reports a safe category without underlying CDP error details", async () => {
     const f = fixture();
     f.state.hook = async () => {
       throw new Error("raw password sword-fish");
     };
-    await expect(f.privacy.scan()).rejects.toThrow("Privacy protection");
+    try {
+      await f.privacy.scan();
+      throw new Error("Expected privacy refusal");
+    } catch (error) {
+      expect(privacyFailure(error)).toEqual({
+        reason: "inspection_failed",
+        message: "The browser could not provide a privacy inspection snapshot",
+      });
+      expect(String(error)).not.toContain("sword-fish");
+    }
+  });
+  test.each(["browser_navigate", "browser_navigate_back"])(
+    "%s privacy refusal leaves the URL unchanged",
+    async (tool) => {
+      const f = fixture([]);
+      await f.driver.initialize();
+      let url = "https://example.com";
+      f.state.hook = async (method, params) => {
+        if (method === "DOMSnapshot.captureSnapshot") throw new Error("private CDP detail");
+        if (method === "Page.navigate" || method === "Page.navigateToHistoryEntry")
+          url = String(params.url ?? "https://example.com/previous");
+        return undefined;
+      };
+      await expect(f.driver.execute(tool, { url: "https://www.cnn.com" })).rejects.toMatchObject({
+        code: "privacy_denied",
+      });
+      expect(url).toBe("https://example.com");
+      expect(
+        f.calls.some(
+          ({ method }) => method === "Page.navigate" || method === "Page.navigateToHistoryEntry",
+        ),
+      ).toBe(false);
+      f.state.hook = undefined;
+      expect((await f.driver.execute("browser_snapshot")).result).toMatchObject({ url });
+    },
+  );
+  test.each(["browser_navigate", "browser_navigate_back"])(
+    "%s succeeds with unavailable content after a committed navigation fails inspection",
+    async (tool) => {
+      const f = fixture([]);
+      await f.driver.initialize();
+      let committed = false;
+      const url = "https://www.cnn.com/?private=uninspected-value";
+      f.state.hook = async (method) => {
+        if (method === "Page.getNavigationHistory")
+          return {
+            currentIndex: 1,
+            entries: [
+              { id: 1, url },
+              { id: 2, url: "https://example.com" },
+            ],
+          };
+        if (method === "Page.navigate" || method === "Page.navigateToHistoryEntry") {
+          committed = true;
+          await f.driver.onEvent("Page.frameNavigated", { frame: { id: "f1", url } });
+          await f.driver.onEvent("Page.lifecycleEvent", {
+            frameId: "f1",
+            loaderId: "next",
+            name: "load",
+          });
+          return { loaderId: "next" };
+        }
+        if (committed && method === "DOMSnapshot.captureSnapshot")
+          throw new Error("uninspected-value");
+        return undefined;
+      };
+      const output = await f.driver.execute(tool, { url });
+      expect(committed).toBe(true);
+      expect(output).toEqual({
+        result: {
+          ok: true,
+          navigated: true,
+          content_unavailable: "privacy",
+          reason: "inspection_failed",
+          message: "The browser could not provide a privacy inspection snapshot",
+        },
+      });
+      expect(JSON.stringify(output)).not.toContain("uninspected-value");
+      expect(f.calls.some(({ method }) => method === "Page.captureScreenshot")).toBe(false);
+      f.state.hook = undefined;
+      expect((await f.driver.execute("browser_snapshot")).result).toMatchObject({ url });
+    },
+  );
+  test.each(["geometry", "viewport", "document", "invalid_snapshot", "node_limit"])(
+    "committed navigation reports the specific %s privacy failure and withholds pixels",
+    async (kind) => {
+      const f = fixture([{ name: "IFRAME" }]);
+      await f.driver.initialize();
+      let committed = false;
+      f.state.hook = async (method) => {
+        if (method === "Page.navigate") {
+          committed = true;
+          await f.driver.onEvent("Page.navigatedWithinDocument", {
+            frameId: "f1",
+            url: "https://example.com/#next",
+          });
+        }
+        if (method === "DOMSnapshot.captureSnapshot" && committed) {
+          if (kind === "invalid_snapshot") return {};
+          if (kind === "node_limit")
+            return {
+              ...f.state.snapshot,
+              documents: [
+                {
+                  ...f.state.snapshot.documents[0],
+                  nodes: {
+                    ...f.state.snapshot.documents[0].nodes,
+                    nodeName: Array(100001).fill(0),
+                  },
+                },
+              ],
+            };
+        }
+        if (method === "Page.captureScreenshot") {
+          if (kind === "geometry") f.state.snapshot.documents[0].layout.bounds[0][0]++;
+          if (kind === "viewport") f.state.viewport.pageY++;
+          if (kind === "document")
+            f.state.snapshot.strings[f.state.snapshot.documents[0].documentURL] =
+              "https://example.com/changed";
+        }
+        return undefined;
+      };
+      const output = await f.driver.execute("browser_navigate", {
+        url: "https://example.com/#next",
+      });
+      expect(output.result).toMatchObject({
+        ok: true,
+        navigated: true,
+        content_unavailable: "privacy",
+        reason: {
+          geometry: "masks_changed",
+          viewport: "viewport_changed",
+          document: "document_changed",
+          invalid_snapshot: "invalid_snapshot",
+          node_limit: "node_limit",
+        }[kind],
+      });
+      expect(output.screenshot).toBeUndefined();
+      expect(output.blobs).toBeUndefined();
+      expect(f.masks).toHaveLength(0);
+    },
+  );
+  test("masking failures expose only a safe category and withhold captured pixels", async () => {
+    const f = fixture([]);
+    const privacy = new PrivacyGuard(
+      async (method) =>
+        method === "DOMSnapshot.captureSnapshot"
+          ? f.state.snapshot
+          : { cssVisualViewport: f.state.viewport },
+      {
+        maskImage: async () => {
+          throw new Error("raw secret from image decoder");
+        },
+      },
+    );
+    try {
+      await privacy.screenshot(async () => new Uint8Array([1]));
+      throw new Error("Expected masking refusal");
+    } catch (error) {
+      expect(privacyFailure(error)).toEqual({
+        reason: "image_masking_failed",
+        message: "The screenshot could not be decoded or masked safely",
+      });
+      expect(String(error)).not.toContain("raw secret");
+    }
+  });
+  test("ordinary embedded frames can be inspected and masked without privacy refusal", async () => {
+    const f = fixture([{ name: "IFRAME" }, { name: "DIV" }]);
+    const output = await f.driver.execute("browser_navigate", { url: "https://www.cnn.com" });
+    expect(output.result).toEqual({ ok: true });
+    expect(output.screenshot).toEqual(new TextEncoder().encode("masked pixels"));
   });
   test("driver masks direct and automatic screenshots and sanitizes AX names before truncation", async () => {
     const f = fixture();

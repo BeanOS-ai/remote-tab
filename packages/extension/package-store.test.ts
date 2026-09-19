@@ -107,12 +107,12 @@ test("store ZIP has the exact runtime allowlist, valid CRCs, published icons, pe
     );
   }
   const manifest = JSON.parse(bytes(members, "manifest.json").toString());
-  expect(manifest.name).toBe("Bean Tab Share");
-  expect(manifest.version).toBe("2.1.0");
+  expect(manifest.name).toBe("Remote Tab");
+  expect(manifest.version).toBe("2.2.0");
   expect(manifest.version).toBe(
     (await Bun.file(join(import.meta.dir, "package.json")).json()).version,
   );
-  expect(manifest.permissions).toEqual(["tabs", "debugger"]);
+  expect(manifest.permissions).toEqual(["tabs", "debugger", "notifications"]);
   expect(manifest.host_permissions).toEqual([`${origin}/*`]);
   expect(manifest.background).toEqual({ service_worker: "worker.js", type: "module" });
   expect(manifest.minimum_chrome_version).toBe("125");
@@ -182,7 +182,7 @@ test("existing output requires force; directories, symlinks and non-ZIP targets 
   await expect(
     packageStore({ origin, output: join(root, "source.ts"), force: true }),
   ).rejects.toThrow("end in .zip");
-  expect((await readdir(root)).filter((name) => name.startsWith(".bean-tab-share-"))).toEqual([]);
+  expect((await readdir(root)).filter((name) => name.startsWith(".remote-tab-"))).toEqual([]);
 });
 
 test("shell entrypoint rejects missing release origin before touching output", async () => {

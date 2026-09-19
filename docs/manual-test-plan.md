@@ -83,7 +83,7 @@ reaches an unshared tab, reveals a protected value, or continues after local Sto
 |---|---|---|---|
 | 0–3 | Install, consent, malformed and used codes | NOT RUN | |
 | 3–9 | All ordinary tools, tab binding, site scope | NOT RUN | |
-| 9–12 | Human pause, active ledger, Stop, ZIP/GIF | NOT RUN | |
+| 9–12 | Human pause, interaction summary, Stop, ZIP/GIF | NOT RUN | |
 | 12–15 | Read-only, Full, privacy masking | NOT RUN | |
 | 15–20 | Real test-login MFA handoff | NOT RUN | |
 | 20–23 | Human Extend, agent denial, 60-second expiry | NOT RUN | |
@@ -98,16 +98,18 @@ reaches an unshared tab, reveals a protected value, or continues after local Sto
    Record the displayed version; there must be no extension error badge.
 2. In profile A, open the clean fixture. Pin/open the extension. Its displayed
    title and URL must identify that exact tab. Default consent must be
-   **Read-only** with **This site only** checked.
+   **Read-only** with **This site only** checked. Confirm the header says
+   **Remote Tab**, the footer says **by BeanOS.ai**, and the button changes to
+   **Control my tab** for Act/Full and back to **Read my tab** for Read-only.
    No validation message or “Please fill out this field” tooltip should appear
-   until **Share this tab** is pressed. Press Share with an empty field and
+   until **Read my tab** is pressed. Press it with an empty field and
    expect the same inline invalid-code message as step 3.
-3. Paste `rt1.bad` and press **Share this tab**. Expect
+3. Paste `rt1.bad` and press **Read my tab**. Expect
    “Paste a valid rt1. code from your agent”; wait two seconds and confirm the
    message remains. No debugger bar or sharing session should appear.
 4. Run `new_share act`. Keep its code available privately for step 6. Select
    **Act — click, type, navigate**, leave **This site only** checked, paste the
-   code, and click **Share this tab**. **Stop** must remain visible, including
+   code, and click **Control my tab**. **Stop** must remain visible, including
    during startup. Do not touch the shared page while agent tools are running.
 5. Run `rt wait-ready --timeout-ms 15000`, then `rt status`. Expect authenticated
    consent with mode `act`, the fixture site, its title/URL, and the extension
@@ -130,7 +132,7 @@ inspect that result even if the CLI process itself exits successfully.
 | Tool / command | Expected observation |
 |---|---|
 | `rt browser_snapshot '{}'` | Correct title, URL, accessible form labels, and refs. |
-| `rt browser_take_screenshot '{}'` | A screenshot attachment of the shared fixture. Inspect it in the ledger below. |
+| `rt browser_take_screenshot '{}'` | A screenshot attachment of the shared fixture. Inspect it in the interaction summary below. |
 | `rt browser_hover '{"ref":"<submit-ref>"}'` | Submit gains its purple hover outline; sharing does not pause. |
 | `rt browser_type '{"ref":"<name-ref>","text":"Ada Test"}'` | Name field becomes exactly `Ada Test`; Activity omits the typed value. |
 | `rt browser_press_key '{"key":"Tab"}'` | Focus moves to the next control; sharing does not pause. |
@@ -147,7 +149,12 @@ inspect that result even if the CLI process itself exits successfully.
 
 Open a second, visibly different tab in profile A and make it active. Without
 interacting with the shared fixture, request another screenshot and snapshot.
-They must still depict the original shared tab. Return to it via the tab strip.
+They must still depict the original shared tab. Open the popup: its shared title
+and origin must still identify that tab, with **Go to shared tab** visible. Click
+it and confirm the shared tab becomes active. Repeat from another window and
+confirm the shared window receives focus. On the shared tab itself, the button
+must be absent. If the tab is closed before cleanup finishes, the popup must
+say it is closed and keep **Stop** available without a navigation button.
 
 Try `rt browser_navigate '{"url":"http://localhost:8081/form"}'`.
 Expect `scope_denied`, a human-visible notice, and no out-of-scope document
@@ -156,20 +163,20 @@ displayed. Test the fixture's **Other host** link too, using its fresh ref with
 host is not a sufficient site-scope test. Later, the Full-mode Any-site session
 checks that this navigation is permitted when the human authorizes it.
 
-## 9–12: Explicit Pause/Resume, ledger, Stop, and exports
+## 9–12: Explicit Pause/Resume, interaction summary, Stop, and exports
 
 1. Move the real mouse inside the shared page, click, scroll, and type a harmless
    character into its Name field. Sharing must remain active, including while
    working in another tab. Click popup **Pause**. Expect **Paused by you** with
    a UTC timestamp and **Resume**. `rt browser_snapshot '{}'` must return
    `paused`; automation cannot resume merely because the human stops typing.
-2. Click popup **Resume**. A new snapshot must succeed. The ledger viewer and
+2. Click popup **Resume**. A new snapshot must succeed. The interaction summary viewer and
    exported ZIP must include separate local Pause/Resume records with UTC
    timestamps, even if no agent command ran between those controls. Start
    `rt browser_wait_for '{"time":3}'`, then click popup **Pause**
    before it finishes. Expect that command to return `paused`, even if you
    quickly click Resume. It must not publish a successful result/screenshot.
-3. Click **View ledger** while active. Wait for **Verified active-session
+3. Click **View interaction summary** while active. Wait for **Verified active-session
    snapshot**. Check command/result ordering, human-readable actions, and
    screenshot thumbnails. **Download ZIP** is enabled; **Render GIF** is
    disabled until a terminal snapshot. The page does not silently refresh.
@@ -177,10 +184,10 @@ checks that this navigation is permitted when the human authorizes it.
    installed `chrome-extension://…/ledger.html` page must open. Expect verified
    stopped history. `rt browser_click '{"ref":"<submit-ref>"}'` must fail;
    the visible form must not change. `rt status` must report `stopped`.
-5. On the terminal ledger, click **Download ZIP**, **Render GIF**, then
+5. On the terminal interaction summary, click **Download ZIP**, **Render GIF**, then
    **Download GIF**. Open the ZIP and GIF. Expect `ledger.json`, PNGs under
    `shots/`, readable screenshots of the shared tab, and a 640×360 replay at
-   one screenshot per second. No server-hosted ledger or media service opens.
+   one screenshot per second. No server-hosted summary or media service opens.
    Render/download again and compare file hashes if time permits; identical
    history must produce identical GIF bytes.
 6. Run `rt ledger export --out "$MANUAL_RUN_DIR/act-export"`. It must verify
@@ -212,11 +219,11 @@ checks that this navigation is permitted when the human authorizes it.
 3. Navigate to `http://localhost:8081/privacy`. Human-enter conspicuous **dummy**
    password, OTP, and card values after clicking **Pause**. Resume using
    the popup, then request a snapshot and screenshot. Values must be absent
-   from text/results and their field regions must be masked in the ledger.
+   from text/results and their field regions must be masked in the interaction summary.
    Embedded frames, if present, must be masked as whole frames.
 4. Console, network, and evaluate must now return `privacy_denied`. Return to
    the clean form and repeat evaluate: it must remain refused for this share.
-   Stop and inspect its ledger for dummy-value leaks, including action labels.
+   Stop and inspect its interaction summary for dummy-value leaks, including action labels.
 
 ## 15–20: Real MFA handoff
 
@@ -239,7 +246,7 @@ checks that this navigation is permitted when the human authorizes it.
    the website and reaches the authenticated landing page. Do not copy either
    credential into a command, screenshot report, terminal, or chat.
 5. Click **Done**. The waiting handoff must complete, then a new snapshot must
-   show the authenticated landing page. Stop and verify the ledger includes
+   show the authenticated landing page. Stop and verify the interaction summary includes
    the handoff and completion. Record only success/failure, no credential or
    account-identifying page contents. A rejected/missing MFA step is not a pass.
 
@@ -265,7 +272,7 @@ checks that this navigation is permitted when the human authorizes it.
 3. Run `new_share expire 60`, share promptly, and wait ready. Do **not** Extend.
    Leave it idle until the actual expiry timestamp (not just the rounded popup
    minute count). Expect local detachment, no further actions, and `expired`
-   from `rt status`. Open its ledger and confirm verified expired history.
+   from `rt status`. Open its interaction summary and confirm verified expired history.
 
 ## 23–25: ID-only redeemer / hijack suspicion
 

@@ -14,7 +14,7 @@ they allow.
 - The agent runs anywhere: a cloud session, a laptop, a CI job. It talks to
   the tab through a tiny **dead-drop server** that stores only ciphertext.
 - The human sees every action as it happens, can stop at any moment, can
-  choose read-only mode, and gets the full ledger (actions + screenshots)
+  choose read-only mode, and gets an interaction summary (actions + screenshots)
   when the session ends.
 - Sessions expire. 30 minutes by default; only the human can extend.
 
@@ -251,8 +251,8 @@ including in a new invocation after stop; it does not wait for redemption.
 Export verifies the entire chain and decrypts attachments before writing
 `ledger.json`, `shots/*.png`, and any other blobs. Existing exports are not
 overwritten. `ledger render --out session.gif` (or `.webm`) currently reports
-that rendering belongs in the installed extension ledger page. That page now
-exports a ZIP and renders a GIF locally; CLI rendering itself remains unimplemented.
+that rendering belongs in the installed extension interaction summary page.
+That page now exports a ZIP and renders a GIF locally; CLI rendering itself remains unimplemented.
 
 ## Tests and extension
 
@@ -298,14 +298,14 @@ and publication remain M5 responsibilities.
 Build and run the server with Bun as described above. Put the API behind your
 own HTTPS origin; choose the store and creation/auth limits in your deployment
 configuration. Keep credentials outside this checkout. `/docs` provides the
-agent bootstrap; the server never hosts a consent or ledger page.
+agent bootstrap; the server never hosts a consent or interaction summary page.
 
 The installed extension must be built for that same origin. From a clean
 checkout with Bun, Python 3, and workspace dependencies installed:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
-  packages/extension/package-store.sh /tmp/bean-tab-share-2.1.0.zip
+  packages/extension/package-store.sh /tmp/remote-tab-2.2.0.zip
 ```
 
 The release packager requires an explicit HTTPS origin and rejects the default
@@ -317,9 +317,9 @@ server address, credential, or deployment configuration is committed here.
 For development, `bun packages/extension/build.ts` writes `dist/extension` for
 Chrome's **Load unpacked**. Its default `https://remote-tab.example` is a
 placeholder; HTTP loopback origins are permitted only for development builds.
-Store uploads and publishing are separate distribution actions. Version 2.1.0
-retains the existing **Bean Tab Share** listing name; a public-store rename is
-an M5 decision. See [extension usage](packages/extension/README.md) for consent,
+The extension is named **Remote Tab**. Store uploads and publishing remain
+separate distribution actions; this display rename does not publish an update.
+See [extension usage](packages/extension/README.md) for consent,
 controls, privacy behavior, and local ledger export.
 
 The generic 2.1.0 build accepts only `rt1.` codes. Supporting the legacy 1.1.2

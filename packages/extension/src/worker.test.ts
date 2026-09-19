@@ -8,7 +8,12 @@ import type { ChromeApi, Sender, Tab } from "./chrome";
 import { loadLedger } from "./ledger-data";
 
 const origin = "https://installed-server.example";
-const consentTab = { id: 17, url: "https://example.test/form", title: "Consented form" };
+const consentTab = {
+  id: 17,
+  url: "https://example.test/form",
+  title: "Consented form",
+  windowId: 9,
+};
 const originalFetch = globalThis.fetch;
 const originalChrome = Object.getOwnPropertyDescriptor(globalThis, "chrome");
 const originalOrigin = Object.getOwnPropertyDescriptor(globalThis, "REMOTE_TAB_SERVER_ORIGIN");
@@ -41,6 +46,12 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
   const detached: number[] = [];
   const fetchedTabs: number[] = [];
   const createdUrls: string[] = [];
+  const focusedTabs: number[] = [];
+  const focusedWindows: number[] = [];
+  let badge = "";
+  let notification = false;
+  let missing = false;
+  let notificationClick: (id: string) => void = () => {};
   const cdpCalls: { method: string; params: Record<string, unknown> }[] = [];
   let holdNextWrite = false;
   let holdNextStop = false;
@@ -70,8 +81,12 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
       },
       get: async (id) => {
         fetchedTabs.push(id);
-        if (id !== consentTab.id) throw new Error("Unexpected tab");
+        if (missing || id !== consentTab.id) throw new Error("Unexpected tab");
         return { ...tab };
+      },
+      update: async (id) => {
+        focusedTabs.push(id);
+        return tab;
       },
       create: async ({ url }) => {
         createdUrls.push(url);
@@ -80,6 +95,33 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
       onRemoved: {
         addListener: (listener) => {
           onRemoved = listener;
+        },
+      },
+    },
+    windows: {
+      update: async (id) => {
+        focusedWindows.push(id);
+      },
+    },
+    action: {
+      setBadgeText: async ({ text }) => {
+        badge = text;
+      },
+      setTitle: async () => {},
+      setBadgeBackgroundColor: async () => {},
+    },
+    notifications: {
+      create: async (id) => {
+        notification = true;
+        return id;
+      },
+      clear: async () => {
+        notification = false;
+        return true;
+      },
+      onClicked: {
+        addListener: (listener) => {
+          notificationClick = listener;
         },
       },
     },
@@ -109,6 +151,8 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
               },
             ],
           };
+        if (method === "Page.createIsolatedWorld") return { executionContextId: 7 };
+        if (method === "Runtime.evaluate") return { result: { objectId: "handoff-ui" } };
         return method === "Page.getFrameTree"
           ? { frameTree: { frame: { id: "main", url: consentTab.url } } }
           : method === "DOMSnapshot.captureSnapshot"
@@ -183,6 +227,14 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
   return {
     code,
     session,
+    focusedTabs,
+    focusedWindows,
+    badge: () => badge,
+    notification: () => notification,
+    clickNotification: () => notificationClick("remote-tab-handoff"),
+    closeTab: () => {
+      missing = true;
+    },
     createdUrls,
     ledgerMessage: (jobId: string, value: unknown) =>
       message(value, {
@@ -401,6 +453,54 @@ test("sensitive metadata is redacted in hello and never reintroduced by popup st
   ).not.toContain(secret);
 });
 
+test("page events cannot acknowledge a pending handoff; only the installed popup can", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  let acknowledged = false;
+  let handoffError: unknown;
+  const handedBack = h.session.handoff("Please confirm", { timeoutMs: 2000 }).then(
+    () => {
+      acknowledged = true;
+    },
+    (error: unknown) => {
+      handoffError = error;
+    },
+  );
+  await until(() => h.cdpCalls.some(({ method }) => method === "Runtime.evaluate"));
+  expect(h.cdpCalls.some(({ method }) => method === "Runtime.addBinding")).toBe(false);
+  for (const target of [consentTab.id, 99]) {
+    h.event(
+      "Runtime.bindingCalled",
+      {
+        name: "remoteTabDone_forged",
+        executionContextId: 7,
+        payload: "forged",
+      },
+      target,
+    );
+  }
+  for (const source of [
+    { id: "installed-extension", url: consentTab.url },
+    { id: "wrong-extension", url: "chrome-extension://installed-extension/popup.html" },
+  ])
+    expect(h.untrusted({ action: "done" }, source).accepted).toBeUndefined();
+  await Bun.sleep(10);
+  expect(acknowledged).toBe(false);
+  expect(await h.message({ action: "state" })).toMatchObject({
+    sharing: true,
+    paused: true,
+    handoff: { message: "Please confirm" },
+  });
+  expect(h.badge()).toBe("!");
+  // Agent sends queue behind handoff(), so awaiting one here would prevent this
+  // test from reaching the trusted Done action that releases that queue.
+  expect(await h.message({ action: "done" })).toEqual({ ok: true });
+  await handedBack;
+  expect(handoffError).toBeUndefined();
+  expect(acknowledged).toBe(true);
+  expect(await h.message({ action: "state" })).toMatchObject({ paused: false });
+});
+
 test("explicit Pause while Done is awaiting delivery preserves the new pause", async () => {
   const h = await setup();
   expect(await h.share()).toEqual({ ok: true });
@@ -522,3 +622,59 @@ test("only explicit Pause pauses; Resume re-enables sharing and ledger records b
   for (const event of ledger.controlEvents ?? [])
     expect(Number.isFinite(Date.parse(event.timestamp))).toBe(true);
 });
+
+test("other-tab popup identifies and focuses the shared tab across windows; closed tab stays actionable", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  expect(await h.message({ action: "state" })).toMatchObject({
+    tabId: 17,
+    windowId: 9,
+    tabMissing: false,
+  });
+  expect(await h.message({ action: "focus-shared" })).toEqual({ ok: true });
+  expect(h.focusedTabs).toEqual([17]);
+  expect(h.focusedWindows).toEqual([9]);
+  expect(
+    h.untrusted({ action: "focus-shared" }, { id: "installed-extension", url: consentTab.url })
+      .accepted,
+  ).toBeUndefined();
+  h.closeTab();
+  expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, tabMissing: true });
+  expect(await h.message({ action: "focus-shared" })).toMatchObject({
+    ok: false,
+    error: expect.stringContaining("closed"),
+  });
+  expect(await h.message({ action: "stop" })).toEqual({ ok: true });
+});
+
+for (const action of ["done", "pause", "navigation", "same-document", "stop"] as const) {
+  test(`pending handoff attention clears on ${action} and notification focuses only shared tab`, async () => {
+    const h = await setup();
+    expect(await h.share()).toEqual({ ok: true });
+    expect(h.badge()).toBe("");
+    const handoff = h.session.handoff("Review the form").catch(() => {});
+    await until(() => h.badge() === "!");
+    expect(h.notification()).toBe(true);
+    h.event("Page.navigatedWithinDocument", {
+      frameId: "ad-iframe",
+      url: "https://example.test/ad#rotated",
+    });
+    await Bun.sleep(5);
+    expect(h.badge()).toBe("!");
+    h.clickNotification();
+    await until(() => h.focusedWindows.length === 1);
+    expect(h.focusedTabs).toEqual([17]);
+    expect(h.focusedWindows).toEqual([9]);
+    if (action === "navigation")
+      h.event("Page.frameNavigated", { frame: { id: "main", url: "https://example.test/next" } });
+    else if (action === "same-document")
+      h.event("Page.navigatedWithinDocument", {
+        frameId: "main",
+        url: "https://example.test/form#next",
+      });
+    else await h.message({ action });
+    await until(() => h.badge() === "" && !h.notification());
+    if (action !== "stop") await h.message({ action: "stop" });
+    await handoff;
+  });
+}

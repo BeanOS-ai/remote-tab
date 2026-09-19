@@ -2,14 +2,27 @@ import { parseCode } from "@remote-tab/protocol";
 import { record } from "./chrome";
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const error = element("error");
-let consentTab: { id?: number; url?: string } | undefined;
+let consentTab: { id?: number; url?: string; title?: string } | undefined;
 let submitting = false;
 let notice = "";
 let feedText = "";
+for (const input of document.querySelectorAll<HTMLInputElement>("input[name=mode]")) {
+  input.onchange = () => {
+    if (input.checked)
+      element("share-label").textContent =
+        input.value === "read" ? "Read my tab" : "Control my tab";
+  };
+}
 async function render() {
-  const state = await chrome.runtime.sendMessage({ action: "state" });
+  const [state, [tab]] = await Promise.all([
+    chrome.runtime.sendMessage({ action: "state" }),
+    chrome.tabs.query({ active: true, currentWindow: true }),
+  ]);
   if (!record(state)) return;
+  consentTab = tab;
   const sharing = state.sharing === true;
+  const tabMissing = sharing && state.tabMissing === true;
+  const otherTab = sharing && typeof state.tabId === "number" && state.tabId !== tab?.id;
   element("open-ledger").hidden = typeof state.sessionId !== "string";
   const starting = state.starting === true || submitting;
   const handoff = record(state.handoff) ? state.handoff : undefined;
@@ -18,27 +31,59 @@ async function render() {
   badge.textContent = starting
     ? "Connecting…"
     : sharing
-      ? handoff
-        ? "Your turn"
-        : paused
-          ? "Paused"
-          : "Sharing"
+      ? tabMissing
+        ? "Shared tab closed"
+        : handoff
+          ? "Your turn"
+          : paused
+            ? "Paused"
+            : "Sharing"
       : "Ready to share";
-  badge.dataset.state = sharing ? (paused || handoff ? "paused" : "sharing") : "ready";
+  badge.dataset.state = sharing
+    ? tabMissing || paused || handoff
+      ? "paused"
+      : "sharing"
+    : "ready";
   element("consent").hidden = sharing || starting;
   element("live").hidden = !sharing;
   element<HTMLButtonElement>("stop").disabled = !sharing && !starting;
-  element("state").textContent =
-    `Sharing in ${state.mode} mode. ${state.scope ? `Site: ${state.scope}` : "Any site"}`;
-  if (sharing) element("tab").textContent = `${state.title ?? ""}\n${state.url ?? ""}`;
+  const access =
+    state.mode === "read"
+      ? "Read-only"
+      : state.mode === "act"
+        ? "Agent can click and type"
+        : "Agent can run scripts";
+  element("state").textContent = tabMissing
+    ? "No agent access: shared tab closed."
+    : `${access} · ${state.scope ? `${state.scope} only` : "Any site"}`;
+  element("tab-label").textContent = sharing ? "SHARED TAB" : "THIS TAB";
+  let origin = "Site unavailable";
+  if (typeof state.url === "string") {
+    try {
+      const url = new URL(state.url);
+      origin = url.origin === "null" ? "Local page" : url.origin;
+    } catch {
+      // A tab can disappear or navigate while its state is being read.
+    }
+  }
+  element("tab").textContent = sharing
+    ? `${state.title || "Untitled tab"}\n${origin}`
+    : `${tab?.title ?? ""}\n${tab?.url ?? ""}`;
+  element("shared-tab-status").hidden = !tabMissing && !otherTab;
+  element("shared-tab-status").textContent = tabMissing
+    ? "The shared tab is closed. Use Stop to end this share."
+    : "You’re viewing a different tab.";
+  element("focus-shared").hidden = !otherTab || tabMissing;
   const remaining =
     typeof state.expiresAt === "string" ? Date.parse(state.expiresAt) - Date.now() : 0;
   element("expiry").textContent = `Ends in ${Math.max(0, Math.ceil(remaining / 60000))} minutes`;
-  element("extend").hidden = !sharing || state.extended === true || remaining > 5 * 60_000;
-  element("handoff").hidden = !handoff;
+  element("expiry").hidden = tabMissing;
+  element("extend").hidden =
+    !sharing || tabMissing || state.extended === true || remaining > 5 * 60_000;
+  element("handoff").hidden = !handoff || tabMissing;
   element("handoff-message").textContent = String(handoff?.message ?? "");
-  element("paused").hidden = !sharing || state.paused !== true || !!handoff;
-  element("pause").hidden = !sharing || paused || !!handoff;
+  element("paused").hidden = !sharing || tabMissing || state.paused !== true || !!handoff;
+  element("pause").hidden = !sharing || tabMissing || paused || !!handoff;
   const actions = Array.isArray(state.actions) ? state.actions.map(String) : [];
   if (JSON.stringify(actions) !== feedText) {
     feedText = JSON.stringify(actions);
@@ -94,7 +139,7 @@ element<HTMLFormElement>("consent").onsubmit = async (event) => {
     submitting = false;
   }
 };
-for (const action of ["stop", "pause", "extend", "done", "resume", "open-ledger"]) {
+for (const action of ["stop", "pause", "extend", "done", "resume", "open-ledger", "focus-shared"]) {
   element<HTMLButtonElement>(action).onclick = async () => {
     const button = element<HTMLButtonElement>(action);
     button.disabled = true;
@@ -109,11 +154,9 @@ for (const action of ["stop", "pause", "extend", "done", "resume", "open-ledger"
     }
   };
 }
-void chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-  consentTab = tab;
-  element("tab").textContent = `${tab?.title ?? ""}\n${tab?.url ?? ""}`;
+void render().catch(() => {
+  error.textContent = "Sharing is unavailable. Reopen the popup.";
 });
-void render();
 setInterval(
   () =>
     void render().catch(() => {
