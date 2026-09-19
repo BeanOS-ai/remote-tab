@@ -30,7 +30,7 @@ function harness(options: Omit<AppOptions, "store" | "now"> = {}) {
       "/v1/sessions",
       {
         method: "POST",
-        body: JSON.stringify({ ttl_seconds: ttl }),
+        body: JSON.stringify({ id: crypto.randomUUID().replaceAll("-", ""), ttl_seconds: ttl }),
         headers: forwarded ? { "x-forwarded-for": forwarded } : undefined,
       },
       token,

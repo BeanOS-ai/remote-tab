@@ -10,8 +10,8 @@ You need the server origin. Open deployments (including BeanOS) need no platform
 API key; ask the operator for a key only if creation returns 401. Replace
 `$SERVER`, `$ID`, and the angle-bracket placeholders below with your values.
 Keep tokens, the secret, and the code out of logs, public issues, URLs and
-third-party paste sites. Generate the 32-byte secret locally using a CSPRNG;
-never send it to the server. Privately send `rt1.<uuid>.<secret-base64url>` to
+third-party paste sites. Generate the 16-byte secret locally using a CSPRNG;
+never send it to the server. Privately send `rt1.<secret-base64url>` to
 the intended human through an authenticated channel. Ask them to paste it
 into the installed extension, select the tab, mode and scope, then Share.
 Do not ask the human to run downloaded code or open a server-hosted page.
@@ -53,7 +53,7 @@ are ISO-8601 UTC. The server cannot validate encrypted contents.
 
 Errors are JSON `{ "error": "<code>", "message": "<detail>" }`: 400 invalid
 input, 401 missing/wrong credentials, 404 unknown path/session/blob, 409
-inactive session, already redeemed, TTL cap, or stale chain, 410 redeem
+`id_taken`, inactive session, already redeemed, TTL cap, or stale chain, 410 redeem
 window closed, 413 too large, 429 `rate_limited` with `Retry-After` seconds.
 Creation rate limits reset; active capacity frees on stop/expiry. Blob and
 message budgets do not reset within a session: wait alone cannot replenish
@@ -65,28 +65,39 @@ and match the encrypted envelope's correlation id before sending again.
 
 ### Create and redeem
 
+Before creation, derive the id as the first 32 lowercase hex characters of
+`SHA-256(UTF8("remote-tab/v1/session-id") || raw_secret_bytes)`. There is no
+separator or terminator between the prefix bytes and the 16 secret bytes.
+Send only this id to the server. The code is exactly 26 characters: `rt1.`
+followed by the secret as 22 unpadded, canonical base64url characters. The
+extension derives the same id locally. Old three-part codes are rejected.
+
 ```http
 POST /v1/sessions
 
-{"ttl_seconds":1800}
+{"id":"7087407e1b71d177d2899a4cb6c7fb0b","ttl_seconds":1800}
 ```
 
 Add the platform bearer header only when the operator requires a key.
 
 201:
 ```json
-{"id":"00000000-0000-4000-8000-000000000001","agent_token":"<agent-token>","expires_at":"2030-01-01T00:30:00.000Z","redeem_until":"2030-01-01T00:10:00.000Z"}
+{"id":"7087407e1b71d177d2899a4cb6c7fb0b","agent_token":"<agent-token>","expires_at":"2030-01-01T00:30:00.000Z","redeem_until":"2030-01-01T00:10:00.000Z"}
 ```
 
 The human extension sends only the id, never the secret (no auth required):
 ```http
-POST /v1/sessions/00000000-0000-4000-8000-000000000001/redeem
+POST /v1/sessions/7087407e1b71d177d2899a4cb6c7fb0b/redeem
 ```
 
 200:
 ```json
 {"browser_token":"<browser-token>","expires_at":"2030-01-01T00:30:00.000Z"}
 ```
+
+The returned id must match the derived id. Duplicate creation returns 409
+`id_taken`; do not retry with that id or deliver its code. Generate a fresh
+secret and create again. The id is exactly 32 lowercase hex characters.
 
 Create accepts integer TTL seconds from 60 through 3600, default 1800.
 Redeem activates the transport. Wait for an authenticated encrypted browser
@@ -180,7 +191,7 @@ Authorization: Bearer <agent-token>
 
 200:
 ```json
-{"id":"00000000-0000-4000-8000-000000000001","state":"active","expires_at":"2030-01-01T00:30:00.000Z","last_seq":2,"last_hash":"<sha256-hex>","redeemed":true}
+{"id":"7087407e1b71d177d2899a4cb6c7fb0b","state":"active","expires_at":"2030-01-01T00:30:00.000Z","last_seq":2,"last_hash":"<sha256-hex>","redeemed":true}
 ```
 
 ```http
@@ -218,7 +229,7 @@ Ask the human to complete those steps directly, and wait for Done.
 
 ### Exact crypto encoding
 
-All strings below are UTF-8. Secret is 32 bytes, encoded base64url without
+All strings below are UTF-8. Secret is 16 bytes, encoded base64url without
 padding in the pasted code. HKDF-SHA256 uses that raw secret, empty salt,
 info `remote-tab/v1/<session-id>`, and 32 output bytes for AES-256-GCM.
 AAD is literal `<session-id>|<role>|<prev_hash>` with ASCII `|` separators,

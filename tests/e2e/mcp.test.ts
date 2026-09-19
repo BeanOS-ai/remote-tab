@@ -5,6 +5,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { type ClientOptions, type Fetch, PRIVATE_DELIVERY_WARNING } from "@remote-tab/client";
 import { createMcpServer } from "@remote-tab/mcp";
 import { parseCode } from "@remote-tab/protocol";
+import { deriveSessionId } from "@remote-tab/protocol/src/crypto";
 import { MemoryStore, createApp } from "@remote-tab/server";
 import { FakeTab, HELLO, PNG, until } from "./fake-tab";
 
@@ -60,6 +61,8 @@ test("real MCP tools drive stateful fake tab, preserve PNGs and block for human 
   try {
     const created = await h.ok("remote_tab_create");
     expect(created.warning).toBe(PRIVATE_DELIVERY_WARNING);
+    expect(created.code).toMatch(/^rt1\.[A-Za-z0-9_-]{21}[AQgw]$/);
+    expect(created.code).toHaveLength(26);
     tab = await FakeTab.redeem({ serverUrl, code: created.code, fetch: h.fetch, ...quick });
     await expect(
       FakeTab.redeem({ serverUrl, code: created.code, fetch: h.fetch, ...quick }),
@@ -167,7 +170,10 @@ test("secret-less redemption reports hijack suspicion, stops, and preserves alre
     const parsed = parseCode(created.code);
     expect(parsed).not.toBeNull();
     const response = await h.fetch(
-      new Request(`${serverUrl}/v1/sessions/${parsed?.sessionId}/redeem`, { method: "POST" }),
+      new Request(
+        `${serverUrl}/v1/sessions/${await deriveSessionId(parsed?.secret ?? "")}/redeem`,
+        { method: "POST" },
+      ),
     );
     expect(response.status).toBe(200);
     // The id-only redeemer never received the secret and cannot authenticate a hello.

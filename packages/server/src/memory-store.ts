@@ -3,6 +3,7 @@ import {
   ChainMismatch,
   RateLimited,
   type SessionAdmission,
+  SessionIdTaken,
   SessionNotActive,
   type SessionRecord,
   type Store,
@@ -17,7 +18,7 @@ export class MemoryStore implements Store {
   private waiters = new Map<string, Set<() => void>>();
 
   async createSession(record: SessionRecord, admission?: SessionAdmission): Promise<void> {
-    if (this.sessions.has(record.id)) throw new Error("duplicate session id");
+    if (this.sessions.has(record.id)) throw new SessionIdTaken();
     if (admission) {
       const live = [...this.sessions.values()].filter(
         (s) =>

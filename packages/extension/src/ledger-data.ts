@@ -8,6 +8,7 @@ import type {
 import { RemoteTabError } from "@remote-tab/client";
 import {
   PROTOCOL_VERSION,
+  SESSION_ID_RE,
   type SessionStatus,
   UUID_V4_RE,
   type WireMessage,
@@ -249,7 +250,7 @@ export class LedgerJobs {
     after: Promise<unknown> = Promise.resolve(),
   ): string {
     this.prune();
-    if (!UUID_V4_RE.test(peer.sessionId)) throw invalid();
+    if (!SESSION_ID_RE.test(peer.sessionId)) throw invalid();
     if (this.jobs.size >= this.maxJobs) throw new LedgerTransferError("ledger_busy");
     const id = crypto.randomUUID();
     const job: Job = {
@@ -444,7 +445,7 @@ export async function loadLedger(
       );
     if (
       typeof response.sessionId !== "string" ||
-      !UUID_V4_RE.test(response.sessionId) ||
+      !SESSION_ID_RE.test(response.sessionId) ||
       (sessionId !== undefined && sessionId !== response.sessionId)
     )
       throw invalid();
@@ -456,14 +457,14 @@ export async function loadLedger(
     if (
       response.state !== "loading" ||
       typeof response.sessionId !== "string" ||
-      !UUID_V4_RE.test(response.sessionId)
+      !SESSION_ID_RE.test(response.sessionId)
     )
       throw invalid();
     await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
   }
   if (
     typeof state.sessionId !== "string" ||
-    !UUID_V4_RE.test(state.sessionId) ||
+    !SESSION_ID_RE.test(state.sessionId) ||
     !integer(state.metadataBytes, LEDGER_MAX_METADATA_BYTES) ||
     state.metadataBytes === 0 ||
     typeof state.metadataSha256 !== "string" ||
