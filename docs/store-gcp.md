@@ -38,7 +38,9 @@ MemoryStore follows the same logical expiry and concurrency contract.
 Long-poll listens to the session head with `onSnapshot`, including the initial
 snapshot to close the read/listen race. It wakes on head advance, stop, deletion,
 expiry, or timeout; listener errors reject. Every path unsubscribes and clears
-timers. The HTTP layer rereads committed messages after waking.
+timers. Extend snapshots rearm expiry to the latest deadline. Request cancellation
+unsubscribes where available; otherwise the 25-second bound applies. The HTTP
+layer rereads committed messages after waking.
 
 Blob writes reserve cumulative bytes transactionally while active, then upload
 outside the transaction with `ifGenerationMatch=0`. Reservation is the operation's
@@ -52,12 +54,12 @@ only session admission and lifetime resource budgets are shared by this store.
 Enable Firestore TTL on Timestamp `delete_at` for both collection groups
 `sessions` and `messages`. Session deletion eligibility is actual expiry +24h,
 updated atomically on Extend. Parent deletion does not delete subcollections.
-Immutable child retention uses creation +60min +24h, covering every permitted
+Immutable child retention uses session `createdAt` +60min +24h, covering every permitted
 Extend without non-atomic bulk rewrites. For a 60-second session, this retains
 children up to 59 minutes beyond its minimum window. A new incarnation prevents
 old children from becoming visible if the parent ID is reused after deletion.
 
-Set each blob's `Custom-Time` to creation +60min in the same create-only upload.
+Set each blob's `Custom-Time` to session `createdAt` +60min in the same create-only upload.
 Configure the bucket lifecycle to delete the `sessions/` prefix when
 `daysSinceCustomTime` is 1. The boundary is eligibility, not guaranteed physical
 erasure. TTL/lifecycle cleanup is asynchronous. Choose soft-delete, versioning,

@@ -118,8 +118,8 @@ three-part format was never distributed.
    extension** (an extension page, code shipped with the extension), which
    decrypts locally, verifies the hash chain, and offers JSON + PNG export and
    a GIF/video render. The agent side can do the same through the CLI. The
-   server serves no ledger page (§5.5). Objects are deleted by the store's
-   lifecycle rule 24 hours after expiry; the export is the durable copy.
+   server serves no ledger page (§5.5). Store cleanup follows §5.3 retention
+   eligibility; deletion is asynchronous. The export is the durable copy.
 
 ## 5. Transport: the dead drop
 
@@ -195,8 +195,8 @@ with timeout/expiry cleanup. Random incarnations isolate retained children from
 reused session IDs. GCS uploads are create-only after byte reservation (§10).
 
 Session TTL `delete_at` equals `expires_at + 24h`, updated on Extend. Children
-have independent cleanup: messages use TTL at creation + 60min + 24h; blob
-`Custom-Time` is creation + 60min with `daysSinceCustomTime: 1`. This prevents
+have independent cleanup: messages use TTL at session creation + 60min + 24h; blob
+`Custom-Time` is session creation + 60min with `daysSinceCustomTime: 1`. This prevents
 partial Extend updates, retaining children up to 59min extra. Deletion is
 asynchronous; soft deletion, holds, and backups can retain data longer.
 See [GCP store contract](store-gcp.md) for provisioning and validation details.
@@ -563,7 +563,7 @@ exceeds its limits.
 | Blob | 4 MiB | fixed |
 | Long-poll wait | 25 s | 25 s |
 | Snapshot size | 200 KiB | fixed; agent narrows with `ref` |
-| Object retention after expiry | 24 h | fixed |
+| Cleanup eligibility | expiry +24h | child retention/deletion caveats (§5.3) |
 | Anonymous API requests per client IP per second | 10 | `REMOTE_TAB_ANONYMOUS_QPS`; 0 requires keys |
 | Keyed API requests per subject per second | resolved QPS | 0 unlimited; per instance (§5.6) |
 | Concurrent sessions per client IP | 20 | `REMOTE_TAB_ACTIVE_PER_IP` |
