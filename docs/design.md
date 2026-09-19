@@ -1,7 +1,7 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-18
-last_reviewed: 2026-09-18
+last_updated: 2026-09-19
+last_reviewed: 2026-09-19
 ---
 
 # remote-tab — design
@@ -77,7 +77,7 @@ three-part format was never distributed.
    when required (§5.3). The server returns `{id, agent_token, expires_at}`;
    the client verifies the returned id. A duplicate id returns 409 `id_taken`;
    treat it as a suspected replay and generate a fresh secret.
-2. **Code.** After creation, the client prints `rt1.<base64url(secret)>`: exactly
+2. **Code.** After creation, the client prints `rt1.{base64url(secret)}`: exactly
    26 characters, including the prefix and 22 unpadded base64url characters.
    The secret never reaches the server. The extension derives the same id
    locally before redeeming. Previous three-part, 32-byte-secret codes are
@@ -153,9 +153,10 @@ the server is an API, not a web application.
   secret is enough and removes a key-exchange round trip.
 - Hash chain: each message carries `prev_hash` and the server rejects a
   message whose `prev_hash` is not the hash of the latest stored message for
-  that session. `hash = SHA-256(session-id || seq || ciphertext)`. The chain is
-  over ciphertext, so the server can enforce it blind, and the client
-  verifies it after decrypting.
+  that session. `hash` is lowercase hex SHA-256 of UTF-8
+  `{session-id}|{decimal-seq}|{base64url-ciphertext-with-tag}`: ASCII pipes,
+  no spaces, ciphertext as the unpadded base64url string including the GCM tag.
+  The server enforces the chain blind; the client verifies it after decrypting.
 
 ### 5.3 Server API (v1)
 
@@ -259,7 +260,7 @@ issuance, or tier-specific product logic belongs here.
   `platform:key:123:10`). Do not silently accept both credential
   interpretations. `qps` is a nonnegative safe integer; 0 means unlimited.
   `HttpKeyResolver` takes precedence when its URL is configured and uses `REMOTE_TAB_KEY_SERVICE_URL` and
-  `REMOTE_TAB_KEY_SERVICE_TOKEN`: authenticated `GET <url>/resolve?key=<sha256>`
+  `REMOTE_TAB_KEY_SERVICE_TOKEN`: authenticated `GET {url}/resolve?key={sha256}`
   with a bearer service token. The query contains lowercase hex SHA-256 of
   the presented key, never the raw key. Positive cache TTL is
   `REMOTE_TAB_KEY_CACHE_SECONDS` (default 300 seconds); negative results cache
@@ -339,7 +340,7 @@ issuance, or tier-specific product logic belongs here.
   document larger than 40,000 UTF-8 bytes. There is no second hand-maintained
   copy of the quick-start.
 - `GET /client-code` returns `{version, files:[{path, sha256, bytes}]}`.
-  Paths are repository-relative. `GET /client-code/<path>` returns those
+  Paths are repository-relative. `GET /client-code/{path}` returns those
   exact UTF-8 bytes as `text/plain` or `application/typescript`, with
   `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
   Version is the package release version, shared across the exposed packages;
@@ -403,7 +404,7 @@ local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
 (2.2.0); the display name is **Remote Tab** and the ZIP basename is
-`remote-tab-<version>.zip`. This rename does not update the public listing or
+`remote-tab-{version}.zip`. This rename does not update the public listing or
 the separate legacy Bean Tab Share tool.
 Packaging does not upload or publish the extension.
 
@@ -517,7 +518,7 @@ a private local file (0600 inside a 0700 directory), refuses overwrite, and
 prints the code with the private-delivery warning. Later commands resume
 that file; the platform API key is not saved. Ledger export verifies and
 decrypts everything before creating a new output directory. The CLI
-`ledger render --out <file.gif|webm>` command currently reports that rendering
+`ledger render --out {file.gif|webm}` command currently reports that rendering
 is available in the installed extension interaction summary page; CLI rendering itself remains unimplemented.
 
 Coding harnesses: Claude Code and Codex attach the MCP server or shell out to

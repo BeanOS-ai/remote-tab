@@ -66,7 +66,7 @@ cloud access. Distribution-owned Dockerfiles and base-image overrides must
 select the same compatible Bun baseline; an upstream pin cannot override them.
 
 The API is key-optional: anonymous calls default to 10 requests/second/IP.
-Present a platform key with `Authorization: Bearer <key>` on creation or
+Present a platform key with `Authorization: Bearer {key}` on creation or
 bootstrap requests for the operator's resolved QPS. Session requests keep
 agent/browser bearer tokens; they inherit the creator's key identity without
 resending its platform key. Set anonymous QPS to 0 to require keys. A supplied
@@ -76,7 +76,7 @@ Operators can use static keys or an external key service. Static entries are
 `platform:key[:qps]` (default 10 QPS, subject `platform`, tier `static`). If a
 legacy key contains colons and ends with a number, append an explicit QPS to
 preserve that key: `platform:key:123:10` keeps raw key `key:123`. HTTP resolution
-sends only SHA-256 of the key to `<base>/resolve?key=<hash>` with the service
+sends only SHA-256 of the key to `{base}/resolve?key={hash}` with the service
 bearer token and expects `{tier,qps,subject}` or HTTP 404. Other service errors
 fail closed with 503 for keyed traffic; anonymous traffic is unaffected.
 Claims cache for 300 seconds (misses: 60), so revocation takes effect after
@@ -156,7 +156,7 @@ other implementations of the exported `Store` interface.
 
 `GET /docs` serves generated agent quick-start markdown. `GET /client-code`
 lists versioned, SHA-256-indexed protocol/client/CLI source files present in
-the build; fetch a file at `/client-code/<path>`. There are no browser pages.
+the build; fetch a file at `/client-code/{path}`. There are no browser pages.
 Running source from that server means trusting its operator with the agent's
 session key. Prefer independently distributed packages when possible; see
 design §5.5 for the explicit custody tradeoff.

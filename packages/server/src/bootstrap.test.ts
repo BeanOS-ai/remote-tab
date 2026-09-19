@@ -39,6 +39,14 @@ test("agent docs are generated markdown with the custody caveat and all APIs", a
   }
 });
 
+test("generated /docs survives HTML tag sanitization without losing protocol text", async () => {
+  const res = await request("/docs");
+  expect(res.status).toBe(200);
+  const text = await res.text();
+  // Agent fetch pipelines can strip HTML-looking tags even inside Markdown code fences.
+  expect(text).not.toMatch(/<[^<>\s][^<>]*>/);
+});
+
 test("source index hashes and byte counts match both downloads and repository files", async () => {
   const res = await request("/client-code");
   expect(res.headers.get("content-type")).toStartWith("application/json");

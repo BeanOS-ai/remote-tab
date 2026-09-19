@@ -131,7 +131,11 @@ export async function openBytes(
   return new Uint8Array(pt);
 }
 
-/** Chain hash the server computes blind and clients verify: SHA-256(sessionId || seq || ciphertext). */
+/**
+ * Chain hash the server computes blind and clients verify: lowercase hex SHA-256 of
+ * UTF-8 `${sessionId}|${seq}|${ciphertext}`, with ASCII pipes and decimal seq.
+ * ciphertext is the unpadded base64url string including the GCM tag, not decoded bytes.
+ */
 export async function chainHash(
   sessionId: string,
   seq: number,
