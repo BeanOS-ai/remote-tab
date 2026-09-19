@@ -155,9 +155,15 @@ export function storeContract(name: string, factory: StoreFactory) {
         trace?.("verifyChain:done; getSession:start");
         expect((await a.getSession(record.id))?.lastHash).toBe(messages[0].hash);
         trace?.("getSession:done; explicit mismatch:start");
-        await expect(append(a, record.id, "bad predecessor", "wrong")).rejects.toBeInstanceOf(
-          ChainMismatch,
-        );
+        let mismatch: unknown;
+        try {
+          await append(a, record.id, "bad predecessor", "wrong");
+        } catch (error) {
+          mismatch = error;
+        }
+        trace?.("explicit mismatch:settled");
+        expect(mismatch).toBeInstanceOf(ChainMismatch);
+        expect((mismatch as ChainMismatch).expectedPrevHash).toBe(messages[0].hash);
         trace?.("explicit mismatch:done");
       },
     );
