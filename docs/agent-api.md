@@ -75,6 +75,43 @@ with fresh nonce and the new AAD before retrying. Never reuse old ciphertext
 at a new chain position. Network errors after writes are ambiguous: read
 and match the encrypted envelope's correlation id before sending again.
 
+### Using the BeanOS-hosted relay (tab.beanos.ai)
+
+This section applies only to `https://tab.beanos.ai`; self-hosters should skip
+it because they issue their own keys.
+
+The key-service base URL is `https://keys.beanos.ai`. Send JSON POST bodies
+with `Content-Type: application/json`.
+
+1. Mint a key: `POST https://keys.beanos.ai/v1/keys` with `{}` and **no auth**.
+   The response includes `key` (the raw key), `subject`, and `tier:"unverified"`.
+   **The raw key is returned exactly once. Persist it immediately and securely;
+   only its hash is stored, so it can never be recovered.**
+2. Use `Authorization: Bearer {api-key}` for the remaining key-service calls
+   below and for relay create/bootstrap calls. For the CLI, set
+   `REMOTE_TAB_SERVER_URL=https://tab.beanos.ai` and `REMOTE_TAB_API_KEY` to
+   the saved key, then follow Create and redeem below. `REMOTE_TAB_API_KEY`
+   is optional: omitting it runs anonymously.
+3. Inspect the key: `GET https://keys.beanos.ai/v1/keys/me` returns
+   `{subject, tier, email_status, usage}`.
+4. Raise the tier: `POST https://keys.beanos.ai/v1/keys/email` with
+   `{"email":"{your-email-address}"}` sends a 6-digit code to that address
+   and returns `{"status":"pending","expires_in":600}`.
+   Then `POST https://keys.beanos.ai/v1/keys/verify` with
+   `{"code":"{six-digit-code}"}` returns `{"tier":"verified"}`.
+   Use the received code (for example, the body shape is `{"code":"123456"}`).
+   A wrong code returns HTTP 400 `invalid_or_expired_code` and leaves the
+   tier unchanged. Each challenge allows 5 attempts before it is dead.
+
+Relay limits are 20 requests/second for `unverified` and 60 requests/second
+for `verified`. Key-service limits are at most 10 key mints/hour and 3
+email-verification requests/hour. When throttled, follow the existing
+[429 guidance](#authentication-json-and-errors).
+
+The `internal` tier is unlimited, exists for BeanOS deployments and patrons,
+and is issued by an operator only; it is **not self-serve**. Internal keys
+reject email attachment with HTTP 403 `internal_key_immutable`.
+
 ### Create and redeem
 
 Before creation, derive the id as the first 32 lowercase hex characters of
