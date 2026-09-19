@@ -288,7 +288,12 @@ issuance, or tier-specific product logic belongs here.
   and retain their existing role-token headers afterwards.
   Exceeding a limit returns 429, JSON `error: "rate_limited"`, and integer
   `Retry-After` seconds. Existing active-session caps, message counts, and blob
-  budgets remain as independent backstops.
+  budgets remain as independent backstops. Shared clients honor explicit
+  `429 rate_limited` responses with `Retry-After` within their existing
+  operation deadline and cancellation signal, so normal bursts and multi-blob
+  ledger exports can finish. Retry only a server-confirmed rejection before
+  mutation; never replay ambiguous network failures or other writes. If the
+  delay exceeds the remaining deadline, surface the rate-limit result.
 - Use `rate-limiter-flexible` pinned to `11.2.1` as the only new server runtime dependency and its
   `RateLimiterMemory`, with `points = qps`, `duration = 1` second, keyed by
   resolved subject or client IP (separate namespaces). Unlimited keyed QPS
