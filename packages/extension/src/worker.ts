@@ -45,30 +45,6 @@ function cancelStart() {
 }
 let driver: TabDriver | undefined;
 let monitor: TakeoverMonitor | undefined;
-let detaching = 0;
-async function detachAfterCleanup(id: number, takeover?: TakeoverMonitor) {
-  detaching++;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    if (takeover) {
-      // Sharing is already revoked synchronously. Give our capture listeners a
-      // bounded chance to disappear before detaching invalidates their CDP calls.
-      await Promise.race([
-        takeover.dispose().catch(() => {}),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, 250);
-        }),
-      ]);
-    }
-  } finally {
-    clearTimeout(timer);
-    try {
-      await chrome.debugger.detach({ tabId: id });
-    } finally {
-      detaching--;
-    }
-  }
-}
 function trusted(sender: Sender) {
   return sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("popup.html");
 }
@@ -89,7 +65,7 @@ async function handle(message: unknown) {
   }
   if (message.action === "stop") {
     cancelStart();
-    if (starting && tabId !== undefined) await detachAfterCleanup(tabId, monitor).catch(() => {});
+    if (starting && tabId !== undefined) await chrome.debugger.detach({ tabId }).catch(() => {});
     await active?.stop();
     return { ok: true };
   }
@@ -110,7 +86,6 @@ async function handle(message: unknown) {
   }
   if (message.action !== "share") throw new Error("Unknown request");
   if (starting || active?.state.sharing) throw new Error("A tab is already shared");
-  if (detaching) throw new Error("Sharing is stopping. Try again shortly.");
   if (typeof message.code !== "string" || !parseCode(message.code))
     throw new Error("Paste a valid rt1. code from your agent");
   if (
@@ -222,14 +197,17 @@ async function handle(message: unknown) {
         title: privacy.sanitize(tab.title ?? "") as string,
         extension_version: chrome.runtime.getManifest().version,
       },
-      detach: () => detachAfterCleanup(target.tabId, takeover),
+      detach: async () => {
+        void takeover.dispose();
+        await chrome.debugger.detach(target);
+      },
     });
     active = boundShare;
     return { ok: true };
   } catch (error) {
+    void newMonitor?.dispose();
     if (attached && selectedId !== undefined)
-      await detachAfterCleanup(selectedId, newMonitor).catch(() => {});
-    else void newMonitor?.dispose();
+      await chrome.debugger.detach({ tabId: selectedId }).catch(() => {});
     driver = undefined;
     tabId = undefined;
     if (error instanceof RemoteTabError && error.code === "already_redeemed")

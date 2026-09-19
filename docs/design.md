@@ -109,7 +109,7 @@ three-part format was never distributed.
    ("the agent needs you to sign in / approve / solve this"), pauses agent
    commands, and the human clicks **Done** to resume. The agent is blocked on
    the `handoff_done` message.
-7. **Stop.** Either side posts `stop`. The extension revokes control immediately, then detaches. The
+7. **Stop.** Either side posts `stop`. The extension detaches immediately. The
    server refuses further commands. Stop cannot be undone; re-share is a new
    session.
 8. **Expire.** TTL 30 minutes by default, 60 maximum. Only the extension can
@@ -402,7 +402,7 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.0.2); the store name stays **Bean Tab Share** until the M5 naming decision.
+(2.0.1); the store name stays **Bean Tab Share** until the M5 naming decision.
 Packaging does not upload or publish the extension.
 
 Popup: paste field, mode (read-only / act / full; full is labelled as
@@ -459,10 +459,7 @@ Behaviour:
   inspection failures also fail closed.
 - Action summaries omit field values and arguments. Extend uses only the
   browser credential, adds 30 minutes, and cannot exceed the 60-minute cap.
-  Stop is terminal: control is revoked immediately. Listener cleanup is bounded
-  to 250 ms, then the debugger detaches unconditionally before any network wait.
-  Completed cleanup permits sharing the same document again; stalled cleanup
-  keeps takeover admission fail-closed and may require the human to reload.
+  Stop is terminal and detaches locally before waiting for a network response.
 - Page content is untrusted. The extension never executes anything from the
   page; the agent is told (in the tool descriptions) that snapshot text is
   data, not instructions.

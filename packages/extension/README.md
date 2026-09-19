@@ -60,11 +60,11 @@ supports up to 300 screenshots; exceeding a limit shows an error rather than
 silently omitting history. The viewer accepts up to 5,000 entries / 96 MiB, with
 32 MiB of metadata; pending transfers expire after five minutes.
 
-Package version 2.0.2 for distribution with Bun and Python 3:
+Package version 2.0.1 for distribution with Bun and Python 3:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
-  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.2.zip
+  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.1.zip
 ```
 
 Release packaging requires an explicit HTTPS origin and rejects the development
@@ -97,7 +97,3 @@ AgentSession protocol against local offline fixtures. CI runs it as the separate
 [30-minute manual test plan](../../docs/manual-test-plan.md) for real-site MFA,
 Chrome UI, expiry, updates, and distribution acceptance, and record its results
 before release. A passing automated suite does not replace that human check.
-
-Version 2.0.2 fixes same-document re-sharing after Stop. Control ends immediately;
-local input-listener cleanup gets at most 250 ms before debugger detachment. If
-cleanup cannot finish, sharing remains refused safely until the page is reloaded.

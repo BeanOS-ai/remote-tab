@@ -32,7 +32,7 @@
     },
     "packages/extension": {
       "name": "@remote-tab/extension",
-      "version": "2.0.2",
+      "version": "2.0.1",
       "dependencies": {
         "@remote-tab/client": "workspace:*",
         "@remote-tab/protocol": "workspace:*",

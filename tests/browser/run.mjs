@@ -91,6 +91,13 @@ async function share(tab, mode) {
   await popup.locator(`input[value="${mode}"]`).check();
   await tab.bringToFront();
   await popup.locator("#consent").evaluate((form) => form.requestSubmit());
+  await popup.waitForFunction(
+    () =>
+      !document.querySelector("#live").hidden ||
+      document.querySelector("#error").textContent.trim(),
+  );
+  if (await popup.locator("#live").isHidden())
+    throw new Error(`Extension refused sharing: ${await popup.locator("#error").textContent()}`);
   const hello = await created.session.waitReady();
   assert.equal(hello.mode, mode);
   assert.equal(hello.scope, "127.0.0.1");
@@ -239,9 +246,12 @@ try {
     pngBytes(await session.send("browser_press_key", { key: "End" }));
     pngBytes(await session.send("browser_press_key", { key: "Space" }));
     pngBytes(await session.send("browser_press_key", { key: "Shift+b" }));
-    assert.equal(await tab.locator("#name").inputValue(), "Ada B");
+    assert.equal(await tab.evaluate(() => document.querySelector("#name").value), "Ada B");
     pngBytes(await session.send("browser_click", { ref: submit }));
-    assert.equal(await tab.locator("#result").textContent(), "Submitted: Ada B");
+    assert.equal(
+      await tab.evaluate(() => document.querySelector("#result").textContent),
+      "Submitted: Ada B",
+    );
     assert.equal(
       (await session.send("browser_evaluate", { function: "() => 42" })).error.code,
       "mode_denied",
@@ -267,12 +277,12 @@ try {
     await tab.bringToFront();
     await tab.keyboard.press("ArrowLeft");
     await popup.locator("#paused").waitFor({ state: "visible" });
-    const beforePaused = await tab.locator("#name").inputValue();
+    const beforePaused = await tab.evaluate(() => document.querySelector("#name").value);
     assert.equal(
       (await session.send("browser_type", { ref: name, text: "must-not-run" })).error.code,
       "paused",
     );
-    assert.equal(await tab.locator("#name").inputValue(), beforePaused);
+    assert.equal(await tab.evaluate(() => document.querySelector("#name").value), beforePaused);
     await clickControl(popup, "resume");
     assert.equal((await session.send("browser_snapshot")).ok, true);
     report("handoff Done and trusted human input pause/Resume");
@@ -300,9 +310,12 @@ try {
       [0, 0, 0, 255],
       [255, 255, 0, 255],
     ]);
-    assert.equal(await tab.locator("#password").inputValue(), SECRETS.password);
-    assert.equal(await tab.locator("#otp").inputValue(), SECRETS.otp);
-    assert.equal(await tab.locator("#card").inputValue(), SECRETS.card);
+    assert.equal(
+      await tab.evaluate(() => document.querySelector("#password").value),
+      SECRETS.password,
+    );
+    assert.equal(await tab.evaluate(() => document.querySelector("#otp").value), SECRETS.otp);
+    assert.equal(await tab.evaluate(() => document.querySelector("#card").value), SECRETS.card);
     for (const tool of ["browser_console_messages", "browser_network_requests"])
       assert.equal((await session.send(tool)).error.code, "privacy_denied");
     report(
@@ -411,13 +424,15 @@ try {
       ["browser_press_key", { key: "x" }],
     ])
       assert.equal((await read.session.send(tool, args)).error.code, "mode_denied");
-    assert.equal(await tab.locator("#name").inputValue(), "");
-    assert.equal(await tab.locator("#result").textContent(), "");
+    assert.equal(await tab.evaluate(() => document.querySelector("#name").value), "");
+    assert.equal(await tab.evaluate(() => document.querySelector("#result").textContent), "");
     await (await stop(tab, read.popup, read.session)).close();
     await read.popup.close();
     report("read-only mode blocks real input without DOM changes");
     // A new share on the exact same document must not mistake the previous monitor's
     // listeners for hostile page handlers. Do not reload between these two shares.
+    // Target DOM reads use evaluate: Playwright locator helpers install their own capture
+    // listeners, which the extension correctly refuses on a subsequent share.
     const documentIdentity = await tab.evaluate(() => performance.timeOrigin);
     const full = await share(tab, "full");
     assert.equal(await tab.evaluate(() => performance.timeOrigin), documentIdentity);
