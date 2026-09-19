@@ -56,7 +56,7 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
     runtime: {
       id: "installed-extension",
       getURL: (path) => `chrome-extension://installed-extension/${path}`,
-      getManifest: () => ({ version: "2.0.1" }),
+      getManifest: () => ({ version: "2.0.2" }),
       sendMessage: async () => undefined,
       onMessage: {
         addListener: (listener) => {
@@ -318,7 +318,7 @@ test("sharing binds the popup's consented tab instead of reselecting the active 
   expect(details.hello).toMatchObject({
     url: consentTab.url,
     title: consentTab.title,
-    extension_version: "2.0.1",
+    extension_version: "2.0.2",
   });
 });
 
