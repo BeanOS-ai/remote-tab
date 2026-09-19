@@ -11,7 +11,7 @@ const CT = "Y2lwaGVydGV4dC1ieXRlcy1oZXJl"; // any base64url ≥ 22 chars
 
 function harness(nowMs?: () => number) {
   const app = createApp({
-    store: new MemoryStore(),
+    store: new MemoryStore(nowMs ? () => new Date(nowMs()) : undefined),
     keyResolver: new StaticKeyResolver(new Map([["test", API_KEY]]), { defaultQps: 0 }),
     anonymousQps: 0,
     now: nowMs ? () => new Date(nowMs()) : undefined,
@@ -212,6 +212,13 @@ describe("messages and the chain", () => {
     );
     expect(second.status).toBe(201);
     expect(((await second.json()) as { seq: number }).seq).toBe(2);
+  });
+
+  test("message cursor rejects unsafe integers before reaching the store", async () => {
+    const { call, id, agent } = await activeSession();
+    const response = await call(`/v1/sessions/${id}/messages?after=9007199254740992`, {}, agent);
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe("invalid");
   });
 
   test("list after seq and long-poll wake-up", async () => {

@@ -9,5 +9,12 @@
   "dependencies": {
     "@remote-tab/protocol": "workspace:*",
     "rate-limiter-flexible": "11.2.1"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./store": "./src/store.ts"
+  },
+  "optionalDependencies": {
+    "@remote-tab/store-gcp": "workspace:*"
   }
 }

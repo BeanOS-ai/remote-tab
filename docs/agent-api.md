@@ -255,3 +255,7 @@ The fixed vector below is for interoperability tests only. Its fixed secret
 and nonce must never be used for a real session. Test HKDF output, encryption,
 decryption and chain hash independently. Random nonce generation in real
 sessions is mandatory.
+
+Storage is memory by default; optional GCP storage uses Firestore for sessions/messages
+and GCS only for encrypted blobs. Storage configuration belongs to the operator;
+the API and encryption protocol are identical. Cleanup follows design §5.3.

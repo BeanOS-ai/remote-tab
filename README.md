@@ -81,8 +81,9 @@ No email, billing, key issuance, or tier product rules are implemented here.
 | `REMOTE_TAB_ACTIVE_MAX` | `500` concurrent sessions globally |
 | `REMOTE_TAB_BLOB_BUDGET_BYTES` | `67108864` uploaded bytes/session |
 | `REMOTE_TAB_MESSAGES_MAX` | `5000` messages/session |
-| `REMOTE_TAB_STORE` | `memory`; `gcs` uses the current GCS adapter |
-| `REMOTE_TAB_GCS_BUCKET` | Required for `gcs` |
+| `REMOTE_TAB_STORE` | `memory`; optional `gcp` uses Firestore + GCS blobs |
+| `REMOTE_TAB_GCS_BUCKET` | Required for `gcp`; ciphertext blobs only |
+| `REMOTE_TAB_FIRESTORE_DATABASE` | `(default)`; Firestore database for `gcp` |
 | `PORT` | `8080` |
 
 QPS values are nonnegative integers; keyed QPS 0 is unlimited. The pinned
@@ -108,9 +109,30 @@ Use the socket IP by default. For an appending trusted proxy chain, configure
 in X-Forwarded-For after treating the socket as the final trusted hop. Restrict
 ingress to that exact chain. Invalid/short chains fall back to the socket.
 The legacy first-value mode is unsuitable for proxies that retain a caller's
-forwarded prefix. GCS currently shares active-session and resource caps across
-instances; memory stores are local. Deployment credentials and values belong
-outside this repository.
+forwarded prefix. Deployment credentials and values belong outside this repository.
+
+The default memory store needs no cloud services and loses sessions on restart.
+For shared durable storage, select `REMOTE_TAB_STORE=gcp`, set the bucket/database,
+and provide Application Default Credentials (including attached-service-account
+metadata credentials on GCP). The optional `@remote-tab/store-gcp` workspace
+package uses Firestore for sessions/messages and GCS for blobs only. Memory mode
+never initializes cloud clients. The built server leaves the adapter external:
+retain/install the adapter package with its dependencies when packaging GCP mode.
+Unknown selectors, including the retired `gcs`, fail startup.
+
+Firestore transactions enforce chain order, lifetime budgets, and shared active
+caps; long-poll uses snapshot listeners. GCP caps support at most 1,000 configured
+global sessions. Memory caps are local; request QPS remains per instance in both
+modes. Enable TTL on `delete_at` in both `sessions` and `messages` collection groups,
+exempt large ciphertext/admission fields from indexing, and configure blob
+lifecycle with `daysSinceCustomTime: 1` on `sessions/`. Session TTL is expiry +24h;
+children use session creation +60min +24h, covering Extend without bulk rewrites.
+Cleanup is asynchronous; soft-delete/backup policies may retain data longer.
+
+See the [GCP store contract](docs/store-gcp.md) for layout, IAM, retention, and
+emulator validation. Migration requires draining the old GCS cursor deployment;
+there is no dual-read compatibility or live migration. Self-hosters may supply
+other implementations of the exported `Store` interface.
 
 `GET /docs` serves generated agent quick-start markdown. `GET /client-code`
 lists versioned, SHA-256-indexed protocol/client/CLI source files present in

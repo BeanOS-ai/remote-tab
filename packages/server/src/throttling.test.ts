@@ -12,7 +12,7 @@ const START = Date.parse("2030-01-01T00:00:00Z");
 
 function harness(options: Omit<AppOptions, "store" | "now"> = {}) {
   let time = START;
-  const store = new MemoryStore();
+  const store = new MemoryStore(() => new Date(time));
   const app = createApp({
     anonymousQps: 10000,
     keyResolver: new StaticKeyResolver(options.apiKeys, { defaultQps: 10000 }),

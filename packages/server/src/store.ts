@@ -38,25 +38,54 @@ export interface StoredMessage {
   createdAt: string;
 }
 
+// Optional adapters can load a second copy of this module beside the server
+// bundle. A shared symbol preserves domain-error identity across those copies.
+const storeErrorBrand = Symbol.for("remote-tab/store-error");
+function branded(value: unknown, tag: string): boolean {
+  return value instanceof Error && Reflect.get(value, storeErrorBrand) === tag;
+}
+
 export class SessionIdTaken extends Error {
+  readonly [storeErrorBrand] = "id_taken";
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return branded(value, "id_taken");
+  }
   constructor() {
     super("session id is already in use");
   }
 }
 
 export class ChainMismatch extends Error {
+  readonly [storeErrorBrand] = "chain_mismatch";
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return (
+      branded(value, "chain_mismatch") &&
+      typeof Reflect.get(value as object, "expectedPrevHash") === "string"
+    );
+  }
   constructor(public readonly expectedPrevHash: string) {
     super("prev_hash does not match the latest stored message");
   }
 }
 
 export class SessionNotActive extends Error {
+  readonly [storeErrorBrand] = "session_not_active";
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return branded(value, "session_not_active");
+  }
   constructor() {
     super("session is stopped or expired");
   }
 }
 
 export class RateLimited extends Error {
+  readonly [storeErrorBrand] = "rate_limited";
+  static [Symbol.hasInstance](value: unknown): boolean {
+    return (
+      branded(value, "rate_limited") &&
+      typeof Reflect.get(value as object, "retryAfterSeconds") === "number"
+    );
+  }
   constructor(public readonly retryAfterSeconds = 60) {
     super("rate limit exceeded");
   }
@@ -90,5 +119,10 @@ export interface Store {
   ): Promise<void>;
   getBlob(id: string, blobId: string): Promise<Uint8Array<ArrayBuffer> | null>;
   /** Resolves when a message with seq > afterSeq may exist, or after timeoutMs. */
-  waitForMessage(id: string, afterSeq: number, timeoutMs: number): Promise<void>;
+  waitForMessage(
+    id: string,
+    afterSeq: number,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
