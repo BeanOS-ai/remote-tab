@@ -301,6 +301,55 @@ try {
     const session = shared.session;
     let popup = shared.popup;
     report("authenticated act hello");
+    const sharedTarget = await worker.evaluate(async (url) => {
+      const target = (await chrome.tabs.query({})).find((candidate) => candidate.url === url);
+      return { tabId: target.id, windowId: target.windowId };
+    }, tab.url());
+    const otherPopupReady = context.waitForEvent("page");
+    const popupWindow = await worker.evaluate(
+      (url) => chrome.windows.create({ url, focused: true, type: "normal" }),
+      `chrome-extension://${new URL(worker.url()).host}/popup.html`,
+    );
+    try {
+      assert.notEqual(popupWindow.id, sharedTarget.windowId);
+      const otherPopup = await otherPopupReady;
+      await otherPopup.waitForLoadState();
+      await otherPopup.locator("#live").waitFor({ state: "visible" });
+      assert.equal(await otherPopup.locator("#tab-label").innerText(), "SHARED TAB");
+      assert.equal(
+        await otherPopup.locator("#tab").innerText(),
+        `Remote Tab offline fixture\n${origin}`,
+      );
+      await otherPopup.locator("#focus-shared").waitFor({ state: "visible" });
+      assert.equal(
+        await worker.evaluate(async (id) => (await chrome.windows.get(id)).focused, popupWindow.id),
+        true,
+      );
+      await otherPopup.locator("#focus-shared").click();
+      const focused = await worker.evaluate(async ({ tabId, windowId }) => {
+        const until = Date.now() + 5000;
+        let state;
+        do {
+          const tab = await chrome.tabs.get(tabId);
+          const window = await chrome.windows.get(windowId);
+          state = { active: tab.active, tabWindowId: tab.windowId, focused: window.focused };
+          if (state.active && state.focused) return state;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        } while (Date.now() < until);
+        return state;
+      }, sharedTarget);
+      assert.deepEqual(focused, {
+        active: true,
+        tabWindowId: sharedTarget.windowId,
+        focused: true,
+      });
+      assert.equal(popup.isClosed(), false, "The original extension popup remains available");
+    } finally {
+      await worker.evaluate((id) => chrome.windows.remove(id), popupWindow.id);
+    }
+    report(
+      "production popup in another window identifies the shared tab and focuses its original window",
+    );
     const snapshot = await session.send("browser_snapshot");
     assert.equal(snapshot.ok, true);
     const name = refFor(snapshot.result.text, "Name");

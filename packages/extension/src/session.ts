@@ -318,7 +318,8 @@ export class SharedSession {
     try {
       if (this.started) this.onStop?.(this, this.stopping);
     } catch {
-      this.state.notice = "Sharing stopped. Open the ledger from the popup to save your history.";
+      this.state.notice =
+        "Sharing stopped. Open the interaction summary from the popup to save your history.";
     }
     return this.stopping;
   }

@@ -23,7 +23,7 @@ async function openLedger(share: SharedSession, settled?: Promise<void>) {
   }
 }
 function ledgerRequest(message: Record<string, unknown>) {
-  if (typeof message.jobId !== "string") throw new Error("Invalid ledger request");
+  if (typeof message.jobId !== "string") throw new Error("Invalid interaction summary request");
   const id = message.jobId;
   if (message.action === "ledger-status") return ledgers.status(id);
   if (message.action === "ledger-release") {
@@ -37,7 +37,7 @@ function ledgerRequest(message: Record<string, unknown>) {
     (message.entry !== undefined && typeof message.entry !== "number") ||
     (message.attachment !== undefined && typeof message.attachment !== "number")
   )
-    throw new Error("Invalid ledger request");
+    throw new Error("Invalid interaction summary request");
   return ledgers.chunk(id, message.kind, message.offset, message.entry, message.attachment);
 }
 let tabId: number | undefined;
