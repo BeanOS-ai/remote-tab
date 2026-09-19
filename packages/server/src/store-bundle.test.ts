@@ -9,12 +9,27 @@ import { ChainMismatch, RateLimited, SessionIdTaken, SessionNotActive } from "./
 test("bundled HTTP handlers recognize independently loaded adapter errors and typed fields", async () => {
   const directory = await mkdtemp(join(tmpdir(), "remote-tab-store-bundle-"));
   try {
-    const built = await Bun.build({
-      entrypoints: [join(import.meta.dir, "app.ts")],
-      target: "bun",
-      outdir: directory,
+    // A fresh compiler avoids Bun's in-process build cache colliding with
+    // modules already imported by the full test suite.
+    const compiler = Bun.spawn({
+      cmd: [
+        process.execPath,
+        "build",
+        join(import.meta.dir, "app.ts"),
+        "--target=bun",
+        "--outdir",
+        directory,
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
     });
-    expect(built.success).toBe(true);
+    const [exit, diagnostics] = await Promise.all([
+      compiler.exited,
+      new Response(compiler.stderr).text(),
+      new Response(compiler.stdout).text(),
+    ]);
+    expect(diagnostics).toBe("");
+    expect(exit).toBe(0);
     const { createApp } = (await import(join(directory, "app.js"))) as {
       createApp: typeof sourceCreateApp;
     };
