@@ -72,7 +72,7 @@ try {
   );
 
   // CDP sees the closed shadow tree, allowing test-only access to the exact button
-  // without adding a production DOM hook or exposing the request capability.
+  // without adding a production DOM hook.
   await cdp.send("DOM.enable");
   const buttonNodes = async () => {
     const { nodes } = await cdp.send("DOM.getFlattenedDocument", { depth: -1, pierce: true });
@@ -152,6 +152,10 @@ try {
   await page.locator("#name").fill("Ada Lovelace");
   assert.equal(await page.locator("#name").inputValue(), "Ada Lovelace");
   assert.equal(calls.length, 0, "Editing the underlying form must not acknowledge the request");
+  await evaluate("handoffTestController.clear()");
+  await host.waitFor({ state: "detached" });
+  await shot("cleared");
+
   // Recheck a still-focused field after genuine viewport and document/container
   // scroll events. Focus does not change during any of these movements.
   const reset = async () => {
@@ -261,7 +265,6 @@ try {
   }
   await evaluate("handoffTestController.clear()");
   await host.waitFor({ state: "detached" });
-  await shot("cleared");
   await evaluate(`globalThis.handoffTestController = (${mountHandoff.toString()})(
     "Expired request", Date.now() - 1)`);
   await host.waitFor({ state: "detached" });

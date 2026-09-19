@@ -457,9 +457,15 @@ test("page events cannot acknowledge a pending handoff; only the installed popup
   const h = await setup();
   expect(await h.share()).toEqual({ ok: true });
   let acknowledged = false;
-  const handedBack = h.session.handoff("Please confirm").then(() => {
-    acknowledged = true;
-  });
+  let handoffError: unknown;
+  const handedBack = h.session.handoff("Please confirm", { timeoutMs: 2000 }).then(
+    () => {
+      acknowledged = true;
+    },
+    (error: unknown) => {
+      handoffError = error;
+    },
+  );
   await until(() => h.cdpCalls.some(({ method }) => method === "Runtime.evaluate"));
   expect(h.cdpCalls.some(({ method }) => method === "Runtime.addBinding")).toBe(false);
   for (const target of [consentTab.id, 99]) {
@@ -486,12 +492,11 @@ test("page events cannot acknowledge a pending handoff; only the installed popup
     handoff: { message: "Please confirm" },
   });
   expect(h.badge()).toBe("!");
-  expect(await h.session.send("browser_snapshot", {}, { timeoutMs: 2000 })).toMatchObject({
-    ok: false,
-    error: { code: "paused" },
-  });
+  // Agent sends queue behind handoff(), so awaiting one here would prevent this
+  // test from reaching the trusted Done action that releases that queue.
   expect(await h.message({ action: "done" })).toEqual({ ok: true });
   await handedBack;
+  expect(handoffError).toBeUndefined();
   expect(acknowledged).toBe(true);
   expect(await h.message({ action: "state" })).toMatchObject({ paused: false });
 });

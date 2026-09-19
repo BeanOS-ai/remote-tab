@@ -261,7 +261,7 @@ export class SharedSession {
       await this.peer.handoffDone(handoff.id);
       if (!this.state.sharing) return;
       this.state.handoff = undefined;
-      // Keep the command loop blocked until capability UI has been removed, so
+      // Keep the command loop blocked until attention UI has been removed, so
       // the next snapshot/action cannot see or hit extension controls.
       await this.onHandoff?.(undefined, this.state.expiresAt ?? "");
       if (!this.state.sharing || epoch !== this.pauseEpoch) return;
