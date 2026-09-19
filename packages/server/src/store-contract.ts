@@ -48,6 +48,16 @@ export function append(
   );
 }
 
+// Await SDK I/O before constructing a Bun matcher: promise matchers can stall gRPC callbacks.
+async function rejection(pending: Promise<unknown>): Promise<unknown> {
+  try {
+    await pending;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected the store operation to reject, but it fulfilled");
+}
+
 /** Same async contract runs against memory and two independent official Firestore clients. */
 export function storeContract(name: string, factory: StoreFactory) {
   describe(name, () => {
@@ -219,8 +229,8 @@ export function storeContract(name: string, factory: StoreFactory) {
       contract(`${state} sessions reject writes and cannot be revived`, async ({ a, b, now }) => {
         const record = sessionRecord(now(), { state });
         await a.createSession(record);
-        await expect(append(a, record.id)).rejects.toBeInstanceOf(SessionNotActive);
-        await expect(b.putBlob(record.id, "denied", new Uint8Array(1))).rejects.toBeInstanceOf(
+        expect(await rejection(append(a, record.id))).toBeInstanceOf(SessionNotActive);
+        expect(await rejection(b.putBlob(record.id, "denied", new Uint8Array(1)))).toBeInstanceOf(
           SessionNotActive,
         );
         expect(
@@ -236,18 +246,20 @@ export function storeContract(name: string, factory: StoreFactory) {
         await a.createSession(record);
         setNow(Date.parse(record.expiresAt));
         let hashed = false;
-        await expect(
-          a.appendMessage(
-            record.id,
-            { role: "agent", prevHash: "", nonce: "n", ciphertext: "c" },
-            async () => {
-              hashed = true;
-              return "h";
-            },
+        expect(
+          await rejection(
+            a.appendMessage(
+              record.id,
+              { role: "agent", prevHash: "", nonce: "n", ciphertext: "c" },
+              async () => {
+                hashed = true;
+                return "h";
+              },
+            ),
           ),
-        ).rejects.toBeInstanceOf(SessionNotActive);
+        ).toBeInstanceOf(SessionNotActive);
         expect(hashed).toBe(false);
-        await expect(b.putBlob(record.id, "expired", new Uint8Array(1))).rejects.toBeInstanceOf(
+        expect(await rejection(b.putBlob(record.id, "expired", new Uint8Array(1)))).toBeInstanceOf(
           SessionNotActive,
         );
         expect(
@@ -265,16 +277,18 @@ export function storeContract(name: string, factory: StoreFactory) {
       async ({ a, now, setNow }) => {
         const record = sessionRecord(now());
         await a.createSession(record);
-        await expect(
-          a.appendMessage(
-            record.id,
-            { role: "agent", prevHash: "", nonce: "n", ciphertext: "c" },
-            async (seq) => {
-              setNow(Date.parse(record.expiresAt));
-              return chainHash(record.id, seq, "c");
-            },
+        expect(
+          await rejection(
+            a.appendMessage(
+              record.id,
+              { role: "agent", prevHash: "", nonce: "n", ciphertext: "c" },
+              async (seq) => {
+                setNow(Date.parse(record.expiresAt));
+                return chainHash(record.id, seq, "c");
+              },
+            ),
           ),
-        ).rejects.toBeInstanceOf(SessionNotActive);
+        ).toBeInstanceOf(SessionNotActive);
         expect(await a.listMessages(record.id, 0, 20)).toEqual([]);
         expect(await a.getSession(record.id)).toMatchObject({ lastSeq: 0, lastHash: "" });
       },
@@ -295,9 +309,11 @@ export function storeContract(name: string, factory: StoreFactory) {
         const winner = candidates[results.findIndex((r) => r.status === "fulfilled")];
         const second = sessionRecord(now());
         await b.createSession(second, { ...admission, clientIp: "192.0.2.2" });
-        await expect(
-          a.createSession(sessionRecord(now()), { ...admission, clientIp: "192.0.2.3" }),
-        ).rejects.toBeInstanceOf(RateLimited);
+        expect(
+          await rejection(
+            a.createSession(sessionRecord(now()), { ...admission, clientIp: "192.0.2.3" }),
+          ),
+        ).toBeInstanceOf(RateLimited);
         await a.updateSession(winner.id, (current) => ({ ...current, state: "stopped" }));
         await b.createSession(sessionRecord(now()), admission);
         setNow(Date.parse(second.expiresAt));
@@ -333,9 +349,9 @@ export function storeContract(name: string, factory: StoreFactory) {
           ttlSeconds: 3600,
         }));
         setNow(Date.parse(record.expiresAt));
-        await expect(
-          a.createSession(sessionRecord(now()), { ...admission, now: now() }),
-        ).rejects.toBeInstanceOf(RateLimited);
+        expect(
+          await rejection(a.createSession(sessionRecord(now()), { ...admission, now: now() })),
+        ).toBeInstanceOf(RateLimited);
         setNow(Date.parse(extended));
         await b.createSession(sessionRecord(now()), { ...admission, now: now() });
       },
@@ -362,9 +378,9 @@ export function storeContract(name: string, factory: StoreFactory) {
         expect(await a.getBlob(record.id, winner)).toEqual(new Uint8Array([1, 2, 3]));
         await a.putBlob(record.id, "rest", new Uint8Array(2), 5);
         expect((await b.getSession(record.id))?.blobBytes).toBe(5);
-        await expect(b.putBlob(record.id, "overflow", new Uint8Array(1), 5)).rejects.toBeInstanceOf(
-          RateLimited,
-        );
+        expect(
+          await rejection(b.putBlob(record.id, "overflow", new Uint8Array(1), 5)),
+        ).toBeInstanceOf(RateLimited);
         expect(await a.getBlob(record.id, "overflow")).toBeNull();
       },
     );
@@ -374,12 +390,17 @@ export function storeContract(name: string, factory: StoreFactory) {
         const record = sessionRecord(now());
         await a.createSession(record);
         await a.putBlob(record.id, "same", new Uint8Array([1, 2]), 4);
-        await expect(b.putBlob(record.id, "same", new Uint8Array([3, 4]), 4)).rejects.toThrow();
+        const duplicateError = await rejection(
+          b.putBlob(record.id, "same", new Uint8Array([3, 4]), 4),
+        );
+        expect(() => {
+          throw duplicateError;
+        }).toThrow();
         expect(await b.getBlob(record.id, "same")).toEqual(new Uint8Array([1, 2]));
         expect((await a.getSession(record.id))?.blobBytes).toBe(4);
-        await expect(a.putBlob(record.id, "excess", new Uint8Array(1), 4)).rejects.toBeInstanceOf(
-          RateLimited,
-        );
+        expect(
+          await rejection(a.putBlob(record.id, "excess", new Uint8Array(1), 4)),
+        ).toBeInstanceOf(RateLimited);
       },
     );
     contract(
