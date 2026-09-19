@@ -6,13 +6,14 @@ import { MemoryStore } from "./memory-store";
 import {
   ChainMismatch,
   RateLimited,
+  SessionIdTaken,
   SessionNotActive,
   type SessionRecord,
   type Store,
 } from "./store";
 
 const record: SessionRecord = {
-  id: "test-session",
+  id: "0123456789abcdef0123456789abcdef",
   platform: "test",
   state: "active",
   createdAt: "2026-09-18T00:00:00Z",
@@ -97,21 +98,99 @@ for (const [name, makeStores] of [
     },
   ],
 ] as const) {
+  describe(`${name} supplied session IDs`, () => {
+    for (const withAdmission of [false, true]) {
+      test(`concurrent duplicate creates preserve exactly one record (admission=${withAdmission})`, async () => {
+        const [a, b] = makeStores();
+        const candidates = [
+          record,
+          { ...record, agentTokenHash: "other-agent", expiresAt: "2026-09-18T00:45:00Z" },
+        ];
+        const results = await Promise.allSettled([
+          a.createSession(candidates[0], withAdmission ? admission : undefined),
+          b.createSession(candidates[1], withAdmission ? admission : undefined),
+        ]);
+        expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+        const winner = results.findIndex((r) => r.status === "fulfilled");
+        expect((results[1 - winner] as PromiseRejectedResult).reason).toBeInstanceOf(
+          SessionIdTaken,
+        );
+        expect(await a.getSession(record.id)).toMatchObject(candidates[winner]);
+      });
+    }
+
+    test("HTTP duplicate and terminal replay return id_taken without replacing tokens or consuming capacity", async () => {
+      const [a, b] = makeStores();
+      const apps = [a, b].map((store) =>
+        createApp({
+          store,
+          now: () => new Date(record.createdAt),
+          limits: { activePerIp: 1, activeMax: 1 },
+        }),
+      );
+      const create = (index: number, id = record.id) =>
+        apps[index].fetch(
+          new Request("http://test/v1/sessions", {
+            method: "POST",
+            body: JSON.stringify({ id }),
+          }),
+        );
+      const responses = await Promise.all([create(0), create(1)]);
+      expect(responses.map((r) => r.status).sort()).toEqual([201, 409]);
+      const winner = responses.find((r) => r.status === 201);
+      const rejected = responses.find((r) => r.status === 409);
+      if (!winner || !rejected) throw new Error("expected exactly one successful creation");
+      expect(await rejected.json()).toEqual({
+        error: "id_taken",
+        message: "session id is already in use",
+      });
+      const session = await winner.json();
+      expect(session.id).toBe(record.id);
+      const before = await a.getSession(record.id);
+      expect((await create(0)).status).toBe(409);
+      expect(await a.getSession(record.id)).toEqual(before);
+      expect(
+        (
+          await apps[0].fetch(
+            new Request(`http://test/v1/sessions/${record.id}/stop`, {
+              method: "POST",
+              headers: { authorization: `Bearer ${session.agent_token}` },
+            }),
+          )
+        ).status,
+      ).toBe(200);
+      const terminal = await a.getSession(record.id);
+      const replay = await create(1);
+      expect(replay.status).toBe(409);
+      expect((await replay.json()).error).toBe("id_taken");
+      expect(await a.getSession(record.id)).toEqual(terminal);
+      expect((await create(1, "f".repeat(32))).status).toBe(201);
+    });
+  });
   describe(`${name} limits`, () => {
     test("parallel creates enforce IP and global caps across instances", async () => {
       const [a, b] = makeStores();
       const results = await Promise.allSettled([
-        a.createSession({ ...record, id: "one", state: "created" }, admission),
-        b.createSession({ ...record, id: "two", state: "created" }, admission),
+        a.createSession(
+          { ...record, id: "00000000000000000000000000000001", state: "created" },
+          admission,
+        ),
+        b.createSession(
+          { ...record, id: "00000000000000000000000000000002", state: "created" },
+          admission,
+        ),
       ]);
       expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
       expect(
         (results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason,
       ).toBeInstanceOf(RateLimited);
-      await b.createSession({ ...record, id: "other-ip" }, { ...admission, clientIp: "192.0.2.2" });
+      await b.createSession(
+        { ...record, id: "00000000000000000000000000000003" },
+        { ...admission, clientIp: "192.0.2.2" },
+      );
       await expect(
         a.createSession(
-          { ...record, id: "global" },
+          { ...record, id: "00000000000000000000000000000004" },
           {
             ...admission,
             clientIp: "192.0.2.3",
@@ -125,7 +204,7 @@ for (const [name, makeStores] of [
       const results = await Promise.allSettled(
         [a, b].map((store, i) =>
           store.createSession(
-            { ...record, id: `global-${i}` },
+            { ...record, id: (i + 10).toString(16).padStart(32, "0") },
             {
               ...admission,
               activeMax: 1,
@@ -144,9 +223,9 @@ for (const [name, makeStores] of [
       const [a, b] = makeStores();
       await a.createSession(record, admission);
       await b.updateSession(record.id, (s) => ({ ...s, state: "stopped" }));
-      await a.createSession({ ...record, id: "replacement" }, admission);
+      await a.createSession({ ...record, id: "00000000000000000000000000000005" }, admission);
       await b.createSession(
-        { ...record, id: "after-expiry", expiresAt: "2026-09-18T01:00:00Z" },
+        { ...record, id: "00000000000000000000000000000006", expiresAt: "2026-09-18T01:00:00Z" },
         {
           ...admission,
           now: new Date(record.expiresAt),
@@ -160,7 +239,7 @@ for (const [name, makeStores] of [
       await b.updateSession(record.id, (s) => ({ ...s, expiresAt: "2026-09-18T01:00:00Z" }));
       await expect(
         a.createSession(
-          { ...record, id: "blocked" },
+          { ...record, id: "00000000000000000000000000000007" },
           {
             ...admission,
             now: new Date(record.expiresAt),
@@ -254,10 +333,10 @@ describe("GCS admission and byte reservation failures", () => {
     };
     await expect(a.createSession(record, admission)).rejects.toThrow("HTTP 503");
     await expect(
-      h.makeStore().createSession({ ...record, id: "blocked" }, admission),
+      h.makeStore().createSession({ ...record, id: "00000000000000000000000000000007" }, admission),
     ).rejects.toBeInstanceOf(RateLimited);
     await h.makeStore().createSession(
-      { ...record, id: "later", expiresAt: "2026-09-18T01:00:00Z" },
+      { ...record, id: "00000000000000000000000000000008", expiresAt: "2026-09-18T01:00:00Z" },
       {
         ...admission,
         now: new Date(record.expiresAt),
@@ -285,7 +364,7 @@ describe("GCS admission and byte reservation failures", () => {
     }));
     await entered.promise;
     await h.makeStore().createSession(
-      { ...record, id: "new", expiresAt: "2026-09-18T01:00:00Z" },
+      { ...record, id: "00000000000000000000000000000009", expiresAt: "2026-09-18T01:00:00Z" },
       {
         ...admission,
         now: new Date(record.expiresAt),
@@ -516,6 +595,7 @@ test("HTTP append reports a concurrent stop as session_not_active", async () => 
     new Request("http://test/v1/sessions", {
       method: "POST",
       headers: { authorization: "Bearer key" },
+      body: JSON.stringify({ id: "a".repeat(32) }),
     }),
   );
   const { id, agent_token } = (await created.json()) as { id: string; agent_token: string };

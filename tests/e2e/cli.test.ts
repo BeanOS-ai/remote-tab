@@ -65,6 +65,8 @@ test("CLI and a driven fake tab complete the human share workflow and export a v
   try {
     const created = await cli(["create"], true);
     expect(created.exit).toBe(0);
+    expect(created.data.code).toMatch(/^rt1\.[A-Za-z0-9_-]{21}[AQgw]$/);
+    expect(created.data.code).toHaveLength(26);
     expect(created.data.warning).toBe(PRIVATE_DELIVERY_WARNING);
     expect((await ok(["status"])).state).toBe("created");
     tab = await FakeTab.redeem({

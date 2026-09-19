@@ -9,6 +9,7 @@ import {
   ChainMismatch,
   RateLimited,
   type SessionAdmission,
+  SessionIdTaken,
   SessionNotActive,
   type SessionRecord,
   type Store,
@@ -111,6 +112,9 @@ export class GcsStore implements Store {
   }
 
   async createSession(record: SessionRecord, admission?: SessionAdmission): Promise<void> {
+    // Retained terminal IDs remain unavailable and must not reserve capacity again.
+    // The create-only state write and admission CAS still arbitrate concurrent creators.
+    if (await this.getSession(record.id)) throw new SessionIdTaken();
     if (admission) {
       await this.changeAdmission((index) => {
         const live = Object.fromEntries(
@@ -118,7 +122,7 @@ export class GcsStore implements Store {
             ([, entry]) => Date.parse(entry.expiresAt) > admission.now.getTime(),
           ),
         );
-        if (Object.hasOwn(live, record.id)) throw new Error("duplicate session id");
+        if (Object.hasOwn(live, record.id)) throw new SessionIdTaken();
         const entries = Object.values(live);
         if (
           entries.length >= admission.activeMax ||
@@ -136,7 +140,7 @@ export class GcsStore implements Store {
       { ...record, ...(admission && { clientIp: admission.clientIp }), lastMessageObject: null },
       "0",
     );
-    if (!r.ok) throw new Error("duplicate session id");
+    if (!r.ok) throw new SessionIdTaken();
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {

@@ -6,8 +6,8 @@ import {
   LIMITS,
   type RedeemResponse,
   type Role,
+  SESSION_ID_RE,
   type SessionStatus,
-  UUID_V4_RE,
   type WireMessage,
 } from "@remote-tab/protocol";
 import { b64url, chainHash } from "@remote-tab/protocol/src/crypto";
@@ -16,6 +16,7 @@ import { CreateRateLimiter, DEFAULT_THROTTLES, type ThrottleLimits, clientIp } f
 import {
   ChainMismatch,
   RateLimited,
+  SessionIdTaken,
   SessionNotActive,
   type SessionRecord,
   type Store,
@@ -112,7 +113,7 @@ export function createApp(opts: AppOptions): {
     id: string,
     allowed: ReadonlyArray<Role>,
   ): Promise<{ session: SessionRecord; role: Role } | Response> {
-    if (!UUID_V4_RE.test(id)) return fail(404, "not_found", "no such session");
+    if (!SESSION_ID_RE.test(id)) return fail(404, "not_found", "no such session");
     const token = bearer(req);
     if (!token) return fail(401, "unauthorized", "missing bearer token");
     const raw = await store.getSession(id);
@@ -157,7 +158,7 @@ export function createApp(opts: AppOptions): {
       const ip = clientIp(req, peer?.requestIP(req)?.address, opts.trustProxy === true);
       const retryAfter = createRate.take(ip, now().getTime(), limits.createPerMinute);
       if (retryAfter !== null) throw new RateLimited(retryAfter);
-      let body: { ttl_seconds?: unknown } = {};
+      let body: { id?: unknown; ttl_seconds?: unknown } = {};
       try {
         const text = await req.text();
         body = text ? (JSON.parse(text) as typeof body) : {};
@@ -166,6 +167,8 @@ export function createApp(opts: AppOptions): {
       }
       if (!body || typeof body !== "object" || Array.isArray(body))
         return fail(400, "invalid", "body must be a JSON object");
+      if (typeof body.id !== "string" || !SESSION_ID_RE.test(body.id))
+        return fail(400, "invalid", "id must be 32 lowercase hexadecimal characters");
       const ttl =
         body.ttl_seconds === undefined ? LIMITS.ttlDefaultSeconds : Number(body.ttl_seconds);
       if (!Number.isInteger(ttl) || ttl < 60)
@@ -175,7 +178,7 @@ export function createApp(opts: AppOptions): {
       const t = now();
       const agentToken = newToken();
       const record: SessionRecord = {
-        id: crypto.randomUUID(),
+        id: body.id,
         platform,
         state: "created",
         createdAt: t.toISOString(),
@@ -208,7 +211,7 @@ export function createApp(opts: AppOptions): {
     // POST /v1/sessions/{id}/redeem — no token; one-shot.
     if (sub === "redeem" && parts.length === 4) {
       if (req.method !== "POST") return fail(404, "not_found", "no such route");
-      if (!UUID_V4_RE.test(id)) return fail(404, "not_found", "no such session");
+      if (!SESSION_ID_RE.test(id)) return fail(404, "not_found", "no such session");
       const browserToken = newToken();
       const hash = await sha256Hex(browserToken);
       const outcome = { v: "missing" as "ok" | "already" | "closed" | "missing" | "inactive" };
@@ -425,6 +428,7 @@ export function createApp(opts: AppOptions): {
             },
           );
         }
+        if (err instanceof SessionIdTaken) return fail(409, "id_taken", err.message);
         if (err instanceof SessionNotActive) return fail(409, "session_not_active", err.message);
         console.error("remote-tab server error", err);
         return fail(500, "invalid", "internal error");
