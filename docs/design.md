@@ -337,7 +337,7 @@ issuance, or tier-specific product logic belongs here.
   private delivery. It includes the §5.5 trust caveat. The build generates
   it from selected sections of this design, `docs/agent-api.md`, and the
   checked crypto vector in `docs/crypto-vector.json`; the build rejects a
-  document larger than 40,000 UTF-8 bytes. There is no second hand-maintained
+  document larger than 44,000 UTF-8 bytes. There is no second hand-maintained
   copy of the quick-start.
 - `GET /client-code` returns `{version, files:[{path, sha256, bytes}]}`.
   Paths are repository-relative. `GET /client-code/{path}` returns those
