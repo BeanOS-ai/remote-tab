@@ -26,7 +26,7 @@ try {
   const manifest = await Bun.file(join(unpacked, "manifest.json")).json();
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "Bean Tab Share");
-  assert.equal(manifest.version, "2.0.0");
+  assert.equal(manifest.version, "2.0.1");
   assert.deepEqual([...manifest.permissions].sort(), ["debugger", "tabs"]);
   assert.deepEqual(manifest.host_permissions, [`${origin}/*`]);
   assert.equal(manifest.background.type, "module");

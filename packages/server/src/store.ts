@@ -36,6 +36,12 @@ export interface StoredMessage {
   createdAt: string;
 }
 
+export class SessionIdTaken extends Error {
+  constructor() {
+    super("session id is already in use");
+  }
+}
+
 export class ChainMismatch extends Error {
   constructor(public readonly expectedPrevHash: string) {
     super("prev_hash does not match the latest stored message");

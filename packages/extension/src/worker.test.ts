@@ -51,7 +51,7 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
     runtime: {
       id: "installed-extension",
       getURL: (path) => `chrome-extension://installed-extension/${path}`,
-      getManifest: () => ({ version: "2.0.0" }),
+      getManifest: () => ({ version: "2.0.1" }),
       sendMessage: async () => undefined,
       onMessage: {
         addListener: (listener) => {
@@ -310,7 +310,11 @@ test("sharing binds the popup's consented tab instead of reselecting the active 
   expect(h.requests.length).toBeGreaterThan(0);
   expect(h.requests.every((request) => new URL(request.url).origin === origin)).toBe(true);
   const details = await h.session.statusDetails();
-  expect(details.hello).toMatchObject({ url: consentTab.url, title: consentTab.title });
+  expect(details.hello).toMatchObject({
+    url: consentTab.url,
+    title: consentTab.title,
+    extension_version: "2.0.1",
+  });
 });
 
 test("changed consent URL is rejected before attach or redemption", async () => {
@@ -323,7 +327,14 @@ test("changed consent URL is rejected before attach or redemption", async () => 
 
 test("missing consent binding and malformed codes are rejected before attach or network", async () => {
   const h = await setup();
-  for (const invalid of [{ tabId: undefined }, { url: undefined }, { code: "rt1.invalid" }])
+  for (const invalid of [
+    { tabId: undefined },
+    { url: undefined },
+    { code: "rt1.invalid" },
+    { code: `rt1.${crypto.randomUUID()}.${"A".repeat(43)}` },
+    { code: `rt1.${"A".repeat(43)}` },
+    { code: `rt1.${"A".repeat(21)}B` },
+  ])
     expect(await h.share(invalid)).toMatchObject({ ok: false });
   expect(h.attached).toEqual([]);
   expect(h.requests).toEqual([]);

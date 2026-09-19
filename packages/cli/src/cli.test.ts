@@ -122,11 +122,14 @@ test("state reserved privately before create; bad paths, flags and overwrites ca
     const created = await cli(["create", "--state", state], h.env);
     expect(created.exit).toBe(0);
     expect(created.stderr).toBe("");
+    expect(created.json.code).toMatch(/^rt1\.[A-Za-z0-9_-]{21}[AQgw]$/);
+    expect(created.json.code).toHaveLength(26);
     expect(created.json.warning).toBe(PRIVATE_DELIVERY_WARNING);
     expect(created.json.state).toBe(state);
     expect((await stat(state)).mode & 0o777).toBe(0o600);
     expect((await stat(join(root, "private"))).mode & 0o777).toBe(0o700);
     const saved = await readFile(state, "utf8");
+    expect(JSON.parse(saved).sessionId).toMatch(/^[a-f0-9]{32}$/);
     expect(saved).not.toContain(apiKey);
     expect(Object.keys(JSON.parse(saved)).sort()).toEqual([
       "agentToken",

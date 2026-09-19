@@ -2,7 +2,7 @@
 // Symmetric secret from the pasted code → HKDF-SHA256 → AES-256-GCM.
 // The server never runs this file; it only stores what comes out of it.
 
-import { type Envelope, PROTOCOL_VERSION, type Role } from "./index";
+import { type Envelope, PROTOCOL_VERSION, type Role, SECRET_RE } from "./index";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
@@ -36,12 +36,25 @@ export function unb64url(text: string): Bytes {
 }
 
 export function randomSecret(): string {
-  return b64url(crypto.getRandomValues(new Uint8Array(new ArrayBuffer(32))));
+  return b64url(crypto.getRandomValues(new Uint8Array(new ArrayBuffer(16))));
+}
+
+/** Public session locator; hashing the secret never sends the secret to the server. */
+export async function deriveSessionId(secret: string): Promise<string> {
+  if (typeof secret !== "string" || !SECRET_RE.test(secret))
+    throw new Error("Invalid session secret");
+  const domain = encode("remote-tab/v1/session-id");
+  const input = new Uint8Array(domain.length + 16);
+  input.set(domain);
+  input.set(unb64url(secret), domain.length);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", input));
+  return Array.from(digest.subarray(0, 16), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function deriveSessionKey(secret: string, sessionId: string): Promise<CryptoKey> {
   const raw = unb64url(secret);
-  if (raw.byteLength !== 32) throw new Error("secret must be 32 bytes");
+  if (raw.byteLength !== 16 && raw.byteLength !== 32)
+    throw new Error("secret must be 16 or 32 bytes");
   const base = await crypto.subtle.importKey("raw", raw, { name: "HKDF" }, false, ["deriveKey"]);
   return crypto.subtle.deriveKey(
     {

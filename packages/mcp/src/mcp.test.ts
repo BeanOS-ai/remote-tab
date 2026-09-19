@@ -98,6 +98,8 @@ describe("MCP tool adapter", () => {
     const { call, create, redeem } = await fixture();
     const created = await create();
     expect(Object.keys(created).sort()).toEqual(["code", "warning"]);
+    expect(created.code).toMatch(/^rt1\.[A-Za-z0-9_-]{21}[AQgw]$/);
+    expect(created.code).toHaveLength(26);
     expect(created.warning).toBe(PRIVATE_DELIVERY_WARNING);
     expect(created.warning).toContain("full code is undetectable");
     const browser = await redeem(created.code);

@@ -63,7 +63,7 @@ try {
       scope: "example.test",
       url: "https://example.test/",
       title: malicious,
-      extension_version: "2.0.0",
+      extension_version: "2.0.1",
     },
   });
   for (const bytes of frames) {
@@ -250,7 +250,7 @@ try {
       scope: "example.test",
       url: "https://example.test/",
       title: "Broken PNG",
-      extension_version: "2.0.0",
+      extension_version: "2.0.1",
     },
   });
   const brokenResult = brokenPair.session.send("browser_take_screenshot");
