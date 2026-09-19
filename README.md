@@ -255,13 +255,24 @@ local offline fixtures. Its CI job may skip only when Chromium cannot launch;
 assertion failures fail the job. Existing focused Chromium smoke scripts remain
 available; see [verification instructions](packages/extension/README.md).
 
+```sh
+bun tests/browser/node_modules/playwright/cli.js install --with-deps chromium
+bun run test:browser
+```
+
+`CHROMIUM_EXECUTABLE` can select an installed Chromium. Environments whose
+network broker prevents loopback HTTP can explicitly use
+`BROWSER_INPROCESS_HTTP=1`; this routes local requests to the same in-process
+server while retaining the actual installed extension and CDP APIs. CI uses
+normal localhost HTTP. This option does not relax assertions or bypass proxies.
+
 Before distribution acceptance, run the mandatory
 [30-minute manual test plan](docs/manual-test-plan.md) and fill in its results table.
 Automated coverage does not establish real-site MFA behavior, production ingress,
 store provisioning, or Chrome Web Store approval. No public or store release is
 performed by these tests. Live CLI/MCP human-pause status and distribution-owned
-legacy migration remain M4 follow-ups; packaging and public-release review remain
-M5 responsibilities.
+legacy migration remain M4 follow-ups; public packaging, licensing/security review,
+and publication remain M5 responsibilities.
 
 ## Self-hosting and extension distribution
 
@@ -275,7 +286,7 @@ checkout with Bun, Python 3, and workspace dependencies installed:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
-  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.1.zip
+  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.2.zip
 ```
 
 The release packager requires an explicit HTTPS origin and rejects the default
@@ -287,12 +298,12 @@ server address, credential, or deployment configuration is committed here.
 For development, `bun packages/extension/build.ts` writes `dist/extension` for
 Chrome's **Load unpacked**. Its default `https://remote-tab.example` is a
 placeholder; HTTP loopback origins are permitted only for development builds.
-Store uploads and publishing are separate distribution actions. Version 2.0.1
+Store uploads and publishing are separate distribution actions. Version 2.0.2
 retains the existing **Bean Tab Share** listing name; a public-store rename is
 an M5 decision. See [extension usage](packages/extension/README.md) for consent,
 controls, privacy behavior, and local ledger export.
 
-The generic 2.0.1 build accepts only `rt1.` codes. Supporting the legacy 1.1.2
+The generic 2.0.2 build accepts only `rt1.` codes. Supporting the legacy 1.1.2
 short-key/pointer flow requires deployment-owned GCS/paste-bin origins, so that
 one-release compatibility shim belongs in the BeanOS distribution during M4.
 It is intentionally absent here and must be removed from that distribution in
