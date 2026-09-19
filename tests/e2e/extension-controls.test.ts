@@ -123,9 +123,11 @@ async function inputRef(h: Awaited<ReturnType<typeof fixture>>) {
   return ref;
 }
 
-test("human pause denies queued browser commands before CDP; status and resume remain available", async () => {
+test("explicit Pause denies queued browser commands before CDP; Resume restores them and records local controls", async () => {
   const h = await fixture();
   try {
+    expect(h.share.controlEvents).toEqual([]);
+    const started = Date.now();
     h.share.pause();
     expect(h.share.state.paused).toBe(true);
     const before = h.calls.length;
@@ -140,6 +142,11 @@ test("human pause denies queued browser commands before CDP; status and resume r
     expect(h.share.state.paused).toBe(false);
     expect((await h.agent.send("browser_snapshot")).ok).toBe(true);
     expect(h.calls.length).toBeGreaterThan(before);
+    expect(h.share.controlEvents.map((event) => event.action)).toEqual(["pause", "resume"]);
+    const timestamps = h.share.controlEvents.map((event) => Date.parse(event.timestamp));
+    expect(timestamps[0]).toBeGreaterThanOrEqual(started);
+    expect(timestamps[1]).toBeGreaterThanOrEqual(timestamps[0]);
+    expect(timestamps[1]).toBeLessThanOrEqual(Date.now());
   } finally {
     await h.close();
   }
@@ -171,6 +178,7 @@ test("agent handoff exposes the message and blocks queued commands until human D
     await handoff;
     expect((await followup).ok).toBe(true);
     expect(h.share.state.handoff).toBeUndefined();
+    expect(h.share.controlEvents).toEqual([]);
     const entries = (await h.agent.ledger()).entries;
     expect(
       entries

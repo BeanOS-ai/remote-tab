@@ -153,6 +153,12 @@ export class AgentSession extends Peer {
     while (true) {
       const remaining = this.checkWait(deadline, options.signal);
       const before = await this.status({ timeoutMs: remaining, signal: options.signal });
+      // Created sessions cannot have a hello and the server does not long-poll them.
+      // Keep readiness below relay quotas even when command polling is configured faster.
+      if (before.state === "created" && !before.redeemed) {
+        await this.pause(deadline, options.signal, Math.max(1000, this.options.pollIntervalMs));
+        continue;
+      }
       if (before.redeemed && redeemedAt === undefined) redeemedAt = this.options.now();
       const graceRemaining =
         redeemedAt === undefined
@@ -186,7 +192,7 @@ export class AgentSession extends Peer {
       if (redeemedAt !== undefined && graceRemaining <= 0)
         return this.suspect("Redeemed session did not send an authenticated hello in time");
       if (["stopped", "expired"].includes(before.state)) this.requireActive(before);
-      // Created sessions do not long-poll on this server. Sleep to avoid a busy loop.
+      // Wait for the redeemed peer without exhausting its hello grace or polling budget.
       if (before.redeemed) {
         try {
           await this.refresh(
@@ -203,7 +209,11 @@ export class AgentSession extends Peer {
           throw error;
         }
       }
-      await this.pause(deadline, options.signal);
+      await this.pause(
+        deadline,
+        options.signal,
+        Math.min(Math.max(1000, this.options.pollIntervalMs), Math.max(0, graceRemaining)),
+      );
     }
   }
   private pendingHandoff(): string | undefined {

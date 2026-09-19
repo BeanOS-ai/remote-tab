@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { BlobReference, Ledger } from "@remote-tab/client";
 import { exportLedger } from "../../cli/src/index";
 import { makeLedgerZip, screenshots } from "./archive";
+import { CONTROL_EVENTS_NOTE, type ExtensionLedger } from "./control-events";
 
 const reference: BlobReference = {
   blob_id: "shot",
@@ -147,4 +148,23 @@ test("empty ledger still produces an independently addressable ledger.json", () 
   ledger.entries = [];
   expect([...readStored(makeLedgerZip(ledger)).keys()]).toEqual(["ledger.json"]);
   expect(screenshots(ledger)).toEqual([]);
+});
+
+test("ZIP retains Pause without later commands as separate, explicitly unauthenticated local metadata", () => {
+  const ledger: ExtensionLedger = {
+    ...fixture(),
+    entries: [],
+    controlEvents: [
+      { action: "pause", timestamp: "2026-09-19T12:00:00.000Z" },
+      { action: "resume", timestamp: "2026-09-19T12:01:00.000Z" },
+      { action: "pause", timestamp: "2026-09-19T12:02:00.000Z" },
+    ],
+  };
+  const files = readStored(makeLedgerZip(ledger));
+  expect([...files.keys()]).toEqual(["ledger.json"]);
+  const saved = JSON.parse(new TextDecoder().decode(files.get("ledger.json")?.bytes));
+  expect(saved.entries).toEqual([]);
+  expect(saved.controlEvents).toEqual(ledger.controlEvents);
+  expect(saved.controlEventsNote).toBe(CONTROL_EVENTS_NOTE);
+  expect(saved.controlEventsNote).toContain("not part of the authenticated command chain");
 });

@@ -16,6 +16,7 @@ afterEach(async () => {
 const origin = "https://release.example:8443";
 const expectedFiles = [
   "LICENSE",
+  "bean-creature.svg",
   "icons/icon128.png",
   "icons/icon16.png",
   "icons/icon48.png",
@@ -107,7 +108,7 @@ test("store ZIP has the exact runtime allowlist, valid CRCs, published icons, pe
   }
   const manifest = JSON.parse(bytes(members, "manifest.json").toString());
   expect(manifest.name).toBe("Bean Tab Share");
-  expect(manifest.version).toBe("2.0.2");
+  expect(manifest.version).toBe("2.1.0");
   expect(manifest.version).toBe(
     (await Bun.file(join(import.meta.dir, "package.json")).json()).version,
   );
@@ -136,6 +137,9 @@ test("store ZIP has the exact runtime allowlist, valid CRCs, published icons, pe
       await Bun.file(join(import.meta.dir, "src/vendor", name)).text(),
     );
   const worker = bytes(members, "worker.js").toString();
+  expect(bytes(members, "bean-creature.svg").toString()).toBe(
+    await Bun.file(join(import.meta.dir, "bean-creature.svg")).text(),
+  );
   expect(worker).toContain(origin);
   expect(worker).not.toContain("https://remote-tab.example");
   expect(worker).not.toContain("storage.googleapis.com");

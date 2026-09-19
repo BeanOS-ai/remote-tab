@@ -1,7 +1,8 @@
-import type { Ledger, LedgerEntry } from "@remote-tab/client";
+import type { LedgerEntry } from "@remote-tab/client";
 import { UUID_V4_RE } from "@remote-tab/protocol";
 import { makeLedgerZip, screenshots } from "./archive";
 import { record } from "./chrome";
+import { CONTROL_EVENTS_NOTE, type ExtensionLedger } from "./control-events";
 import { GifEncoder, quantize } from "./gif";
 import { loadLedger } from "./ledger-data";
 import { actionSummary } from "./summary";
@@ -13,7 +14,7 @@ const gifButton = element<HTMLButtonElement>("render-gif");
 const exportStatus = element("export-status");
 const urls = new Set<string>();
 const jobId = location.hash.slice(1);
-let ledger: Ledger | undefined;
+let ledger: ExtensionLedger | undefined;
 let gifUrl: string | undefined;
 function blobUrl(bytes: Uint8Array, type: string) {
   const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type }));
@@ -84,7 +85,7 @@ function appendResult(article: HTMLElement, entry?: LedgerEntry) {
   } else article.append(textNode("p", "Completed", "outcome"));
   if ("result" in body) article.append(details("Result details", body.result));
 }
-function showLedger(history: Ledger) {
+function showLedger(history: ExtensionLedger) {
   const timeline = element("timeline");
   const results = new Map(
     history.entries
@@ -174,6 +175,21 @@ function showLedger(history: Ledger) {
       article.append(img);
     }
     fragment.append(article);
+  }
+  if (history.controlEvents?.length) {
+    const controls = document.createElement("section");
+    controls.id = "local-human-controls";
+    controls.append(textNode("h2", "Local human controls"), textNode("p", CONTROL_EVENTS_NOTE));
+    for (const event of history.controlEvents) {
+      const article = document.createElement("article");
+      article.className = "entry";
+      article.append(
+        textNode("h3", event.action === "pause" ? "Human paused sharing" : "Human resumed sharing"),
+        textNode("p", event.timestamp, "meta"),
+      );
+      controls.append(article);
+    }
+    fragment.append(controls);
   }
   timeline.replaceChildren(fragment);
   element("empty").hidden = commands !== 0;

@@ -7,6 +7,7 @@ const icons = { "16": "icons/icon16.png", "48": "icons/icon48.png", "128": "icon
 const staticFiles = [
   ["popup.html", "popup.html"],
   ["style.css", "style.css"],
+  ["bean-creature.svg", "bean-creature.svg"],
   ["ledger.html", "ledger.html"],
   ["ledger.css", "ledger.css"],
   ...Object.values(icons).map((file) => [file, file]),

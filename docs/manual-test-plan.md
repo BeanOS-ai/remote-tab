@@ -12,6 +12,9 @@ This document is a procedure, not an execution report: all human results start
 - Read through the steps once before timing the run. Use Chrome 125 or newer,
   Bun, and this checkout with dependencies installed.
   Prepare two disposable Chrome profiles, A and B, with no personal tabs.
+  Branded Google Chrome 137+ ignores `--load-extension`; install manually with
+  `chrome://extensions` → **Load unpacked**. Automated extension runs should use
+  Chrome for Testing or Chromium.
 - Have an approved staging login with a disposable account and working MFA ready.
   Confirm its sign-in flow before the run. A dummy OTP field is **not** evidence
   of completing real MFA. Do not use a production account or real payment data.
@@ -61,6 +64,8 @@ This document is a procedure, not an execution report: all human results start
   `new_share NAME SECONDS` prints a private code; paste it only into the
   extension. Each name below is unique because create refuses to overwrite a
   state file. Keep state and exports private. Do not enable terminal recording.
+  Codes must be redeemed within **10 minutes** of creation and before session
+  expiry; each code works once. Generate a fresh code if setup took longer.
 
 ## Clock and results
 
@@ -94,6 +99,9 @@ reaches an unshared tab, reveals a protected value, or continues after local Sto
 2. In profile A, open the clean fixture. Pin/open the extension. Its displayed
    title and URL must identify that exact tab. Default consent must be
    **Read-only** with **This site only** checked.
+   No validation message or “Please fill out this field” tooltip should appear
+   until **Share this tab** is pressed. Press Share with an empty field and
+   expect the same inline invalid-code message as step 3.
 3. Paste `rt1.bad` and press **Share this tab**. Expect
    “Paste a valid rt1. code from your agent”; wait two seconds and confirm the
    message remains. No debugger bar or sharing session should appear.
@@ -148,14 +156,17 @@ displayed. Test the fixture's **Other host** link too, using its fresh ref with
 host is not a sufficient site-scope test. Later, the Full-mode Any-site session
 checks that this navigation is permitted when the human authorizes it.
 
-## 9–12: Human takeover, ledger, Stop, and exports
+## 9–12: Explicit Pause/Resume, ledger, Stop, and exports
 
-1. Move the real mouse inside the shared page, then type a harmless character
-   into its Name field. Expect **Paused: you took over** and **Resume** in the
-   popup. `rt browser_snapshot '{}'` must return `paused`; automation cannot
-   continue merely because the human stops typing.
-2. Click popup **Resume**. A new snapshot must succeed. Start
-   `rt browser_wait_for '{"time":3}'`, then move the real mouse in the page
+1. Move the real mouse inside the shared page, click, scroll, and type a harmless
+   character into its Name field. Sharing must remain active, including while
+   working in another tab. Click popup **Pause**. Expect **Paused by you** with
+   a UTC timestamp and **Resume**. `rt browser_snapshot '{}'` must return
+   `paused`; automation cannot resume merely because the human stops typing.
+2. Click popup **Resume**. A new snapshot must succeed. The ledger viewer and
+   exported ZIP must include separate local Pause/Resume records with UTC
+   timestamps, even if no agent command ran between those controls. Start
+   `rt browser_wait_for '{"time":3}'`, then click popup **Pause**
    before it finishes. Expect that command to return `paused`, even if you
    quickly click Resume. It must not publish a successful result/screenshot.
 3. Click **View ledger** while active. Wait for **Verified active-session
@@ -199,7 +210,7 @@ checks that this navigation is permitted when the human authorizes it.
    Expect the fixture title and `check:7`. Navigate to
    `http://localhost:8081/form`; it must succeed in this Any-site session.
 3. Navigate to `http://localhost:8081/privacy`. Human-enter conspicuous **dummy**
-   password, OTP, and card values; takeover must pause sharing. Resume using
+   password, OTP, and card values after clicking **Pause**. Resume using
    the popup, then request a snapshot and screenshot. Values must be absent
    from text/results and their field regions must be masked in the ledger.
    Embedded frames, if present, must be masked as whole frames.
@@ -211,8 +222,7 @@ checks that this navigation is permitted when the human authorizes it.
 
 1. Run `new_share mfa`. Open the approved staging login in profile A and share
    with **Act** and the scope required by that login's redirects. Wait ready.
-   If the site is refused because existing capture listeners prevent safe
-   takeover detection, record **BLOCKED** and the site's alias. Do not disable
+   If the site is refused because protected-field inspection cannot run safely, record **BLOCKED** and the site's alias. Do not disable
    the guard, reload away form state, or substitute a dummy OTP as a pass.
 2. Run the following and leave it waiting:
 

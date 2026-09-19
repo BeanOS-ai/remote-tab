@@ -215,7 +215,7 @@ One MCP process holds one current session; stop it before creating another.
 Status includes transport state, expiry and sequence, plus the authenticated
 hello's mode/scope when available. The MCP/CLI transport-status adapters do not
 query live human-pause state; the extension popup shows it, and queued browser
-commands receive `paused` while the human has taken over.
+commands receive `paused` after the human presses Pause.
 
 ## CLI
 
@@ -305,7 +305,7 @@ checkout with Bun, Python 3, and workspace dependencies installed:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
-  packages/extension/package-store.sh /tmp/bean-tab-share-2.0.1.zip
+  packages/extension/package-store.sh /tmp/bean-tab-share-2.1.0.zip
 ```
 
 The release packager requires an explicit HTTPS origin and rejects the default
@@ -317,12 +317,12 @@ server address, credential, or deployment configuration is committed here.
 For development, `bun packages/extension/build.ts` writes `dist/extension` for
 Chrome's **Load unpacked**. Its default `https://remote-tab.example` is a
 placeholder; HTTP loopback origins are permitted only for development builds.
-Store uploads and publishing are separate distribution actions. Version 2.0.1
+Store uploads and publishing are separate distribution actions. Version 2.1.0
 retains the existing **Bean Tab Share** listing name; a public-store rename is
 an M5 decision. See [extension usage](packages/extension/README.md) for consent,
 controls, privacy behavior, and local ledger export.
 
-The generic 2.0.1 build accepts only `rt1.` codes. Supporting the legacy 1.1.2
+The generic 2.1.0 build accepts only `rt1.` codes. Supporting the legacy 1.1.2
 short-key/pointer flow requires deployment-owned GCS/paste-bin origins, so that
 one-release compatibility shim belongs in the BeanOS distribution during M4.
 It is intentionally absent here and must be removed from that distribution in

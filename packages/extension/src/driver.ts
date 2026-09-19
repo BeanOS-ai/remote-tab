@@ -536,7 +536,7 @@ export class TabDriver {
     };
   }
   async screenshot(ref?: string): Promise<Uint8Array> {
-    if (this.paused) throw new DriverError("paused", "Paused: you took over");
+    if (this.paused) throw new DriverError("paused", "Paused by you");
     this.checkUrl(this.url);
     let clip: ScreenshotClip | undefined;
     if (ref) {
@@ -677,7 +677,7 @@ export class TabDriver {
     };
   }
   async execute(tool: string, args: Record<string, unknown> = {}): Promise<DriverResult> {
-    if (this.paused) throw new DriverError("paused", "Paused: you took over");
+    if (this.paused) throw new DriverError("paused", "Paused by you");
     if (!READ.has(tool) && !ACT.has(tool))
       throw new DriverError("unknown_tool", "Unknown browser tool");
     if (

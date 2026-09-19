@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- BeanOS bean creature. Navy body, white winks. Same SVG on light and dark. On dark, add a white drop-shadow glow for contrast (see brand/bean-creature/README.md). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 220" aria-label="BeanOS bean">
+  <defs>
+    <g id="bean-front-layer-n">
+      <path d="M 28 96
+               C 28 38, 88 18, 118 50
+               C 121 54, 127 54, 130 50
+               C 160 18, 220 38, 220 96
+               C 220 152, 174 170, 124 170
+               C 74 170, 28 152, 28 96 Z"/>
+      <rect x="96"  y="160" width="20" height="32" rx="10"/>
+      <rect x="152" y="160" width="20" height="32" rx="10"/>
+    </g>
+    <mask id="bean-leg-mask-n" maskUnits="userSpaceOnUse" x="0" y="0" width="240" height="220">
+      <rect width="240" height="220" fill="white"/>
+      <use href="#bean-front-layer-n" fill="black" stroke="black" stroke-width="8" stroke-linejoin="round"/>
+    </mask>
+  </defs>
+
+  <g mask="url(#bean-leg-mask-n)" fill="#1e1c4e">
+    <rect x="68"  y="150" width="20" height="38" rx="10"/>
+    <rect x="124" y="150" width="20" height="38" rx="10"/>
+  </g>
+  <use href="#bean-front-layer-n" fill="#1e1c4e"/>
+  <circle cx="86" cy="100" r="14" fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 170 86 L 152 100 L 170 114" fill="none" stroke="#ffffff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

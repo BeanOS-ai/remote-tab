@@ -26,7 +26,7 @@ try {
   const manifest = await Bun.file(join(unpacked, "manifest.json")).json();
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "Bean Tab Share");
-  assert.equal(manifest.version, "2.0.1");
+  assert.equal(manifest.version, "2.1.0");
   assert.deepEqual([...manifest.permissions].sort(), ["debugger", "tabs"]);
   assert.deepEqual(manifest.host_permissions, [`${origin}/*`]);
   assert.equal(manifest.background.type, "module");
@@ -41,6 +41,7 @@ try {
     "popup.html",
     "popup.js",
     "style.css",
+    "bean-creature.svg",
     "ledger.html",
     "ledger.js",
     "ledger.css",
@@ -88,6 +89,13 @@ try {
   assert.equal(await popup.locator("#consent").isVisible(), true);
   assert.equal(await popup.locator('script[src="popup.js"]').count(), 1);
   assert.equal(await popup.evaluate(() => document.styleSheets.length), 1);
+  assert.equal(
+    await popup
+      .locator('img[src="bean-creature.svg"]')
+      .evaluate((img) => img.complete && img.naturalWidth > 0),
+    true,
+  );
+  assert.equal(await popup.locator('a[href="https://beanos.ai/remote-tab"]').count(), 1);
   const state = await popup.evaluate(() => chrome.runtime.sendMessage({ action: "state" }));
   assert.equal(state.sharing, false, "Installed popup must reach its worker");
   await popup.locator("#code").fill("rt1.invalid");

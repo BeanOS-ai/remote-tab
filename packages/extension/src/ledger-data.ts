@@ -1,10 +1,4 @@
-import type {
-  Attachment,
-  BlobReference,
-  BrowserPeer,
-  Ledger,
-  LedgerEntry,
-} from "@remote-tab/client";
+import type { Attachment, BlobReference, BrowserPeer, LedgerEntry } from "@remote-tab/client";
 import { RemoteTabError } from "@remote-tab/client";
 import {
   PROTOCOL_VERSION,
@@ -14,6 +8,7 @@ import {
   type WireMessage,
 } from "@remote-tab/protocol";
 import { b64url, unb64url, verifyChain } from "@remote-tab/protocol/src/crypto";
+import { type ControlEvent, type ExtensionLedger, snapshotControlEvents } from "./control-events";
 
 export const LEDGER_CHUNK_BYTES = 192 * 1024;
 export const LEDGER_MAX_METADATA_BYTES = 32 * 1024 * 1024;
@@ -66,6 +61,7 @@ interface LedgerMetadata {
   version: 1;
   sessionId: string;
   status: SessionStatus;
+  controlEvents?: readonly ControlEvent[];
   entries: {
     message: WireMessage;
     envelope: LedgerEntry["envelope"];
@@ -129,6 +125,13 @@ function validateMetadata(value: unknown, sessionId: string): LedgerMetadata {
     value.entries.length > MAX_ENTRIES
   )
     throw invalid();
+  if ("controlEvents" in value) {
+    try {
+      value.controlEvents = snapshotControlEvents(value.controlEvents);
+    } catch {
+      throw invalid();
+    }
+  }
   const status = value.status;
   if (
     status.id !== sessionId ||
@@ -248,10 +251,17 @@ export class LedgerJobs {
   create(
     peer: Pick<BrowserPeer, "sessionId" | "ledger">,
     after: Promise<unknown> = Promise.resolve(),
+    controlEvents?: readonly ControlEvent[],
   ): string {
     this.prune();
     if (!SESSION_ID_RE.test(peer.sessionId)) throw invalid();
     if (this.jobs.size >= this.maxJobs) throw new LedgerTransferError("ledger_busy");
+    let controls: readonly ControlEvent[] | undefined;
+    try {
+      if (controlEvents !== undefined) controls = snapshotControlEvents(controlEvents);
+    } catch {
+      throw invalid();
+    }
     const id = crypto.randomUUID();
     const job: Job = {
       controller: new AbortController(),
@@ -268,7 +278,7 @@ export class LedgerJobs {
       .catch(() => undefined)
       .then(() => {
         // Only one retrieval may allocate at a time; ready snapshots share its budget.
-        this.retrieval = this.retrieval.then(() => this.prepare(id, job, peer));
+        this.retrieval = this.retrieval.then(() => this.prepare(id, job, peer, controls));
       });
     return id;
   }
@@ -276,6 +286,7 @@ export class LedgerJobs {
     id: string,
     job: Job,
     peer: Pick<BrowserPeer, "sessionId" | "ledger">,
+    controlEvents?: readonly ControlEvent[],
   ): Promise<void> {
     try {
       if (this.jobs.get(id) !== job) return;
@@ -315,7 +326,13 @@ export class LedgerJobs {
         attachments.push(buffers);
         entries.push({ message: entry.message, envelope: entry.envelope, attachments: outputs });
       }
-      const data = { version: 1, sessionId: ledger.sessionId, status: ledger.status, entries };
+      const data = {
+        version: 1,
+        sessionId: ledger.sessionId,
+        status: ledger.status,
+        entries,
+        ...(controlEvents === undefined ? {} : { controlEvents }),
+      };
       validateMetadata(data, job.sessionId);
       const metadata = encoder.encode(JSON.stringify(data));
       if (metadata.length > LEDGER_MAX_METADATA_BYTES)
@@ -404,7 +421,7 @@ export async function loadLedger(
   jobId: string,
   rpc: LedgerRpc,
   options: { timeoutMs?: number; pollMs?: number; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<Ledger> {
+): Promise<ExtensionLedger> {
   if (!UUID_V4_RE.test(jobId)) throw invalid();
   const timeoutMs = options.timeoutMs ?? 180000;
   const pollMs = options.pollMs ?? 500;
@@ -544,5 +561,10 @@ export async function loadLedger(
   // Release is an acknowledgement after complete verification. A worker that
   // disappears now does not invalidate the page's independent in-memory copy.
   await call({ action: "ledger-release", jobId }, 1000).catch(() => undefined);
-  return { sessionId: metadata.sessionId, status: metadata.status, entries };
+  return {
+    sessionId: metadata.sessionId,
+    status: metadata.status,
+    entries,
+    ...(metadata.controlEvents === undefined ? {} : { controlEvents: metadata.controlEvents }),
+  };
 }

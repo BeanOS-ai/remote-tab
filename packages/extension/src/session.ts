@@ -1,5 +1,6 @@
 import { BrowserPeer, type ClientOptions, type Hello, RemoteTabError } from "@remote-tab/client";
 import { parseCode } from "@remote-tab/protocol";
+import { type ControlEvent, MAX_CONTROL_EVENTS } from "./control-events";
 import { DriverError, type TabDriver } from "./driver";
 import { actionSummary } from "./summary";
 
@@ -21,6 +22,8 @@ export type StopObserver = (share: SharedSession, settled: Promise<void>) => voi
 /** Owns one consented tab. The peer/key lives only in memory; restart requires fresh consent. */
 export class SharedSession {
   state: ShareState;
+  readonly controlEvents: ControlEvent[] = [];
+  private lastPauseNotice = "Paused by you";
   private readonly abort = new AbortController();
   private loop?: Promise<void>;
   private commandPoll?: AbortController;
@@ -28,12 +31,11 @@ export class SharedSession {
   private stopping?: Promise<void>;
   private started = false;
   private expiryTimer?: ReturnType<typeof setTimeout>;
-  private takeoverEpoch = 0;
+  private pauseEpoch = 0;
   private actionEpoch?: number;
   get interrupted() {
     return (
-      this.state.paused ||
-      (this.actionEpoch !== undefined && this.actionEpoch !== this.takeoverEpoch)
+      this.state.paused || (this.actionEpoch !== undefined && this.actionEpoch !== this.pauseEpoch)
     );
   }
   private constructor(
@@ -63,7 +65,6 @@ export class SharedSession {
       driver: TabDriver;
       detach: () => Promise<void>;
       isCancelled?: () => boolean;
-      isPaused?: () => boolean;
       onStop?: StopObserver;
     },
   ) {
@@ -79,8 +80,6 @@ export class SharedSession {
     try {
       share.state.expiresAt = (await peer.status()).expires_at;
       if (options.isCancelled?.()) throw new Error("Sharing cancelled");
-      share.state.paused = options.isPaused?.() ?? false;
-      share.driver.setPaused(share.state.paused);
       share.armExpiry();
       share.started = true;
       share.loop = share.run();
@@ -148,25 +147,25 @@ export class SharedSession {
           await this.peer.sendError(
             command.id,
             "paused",
-            "Paused: you took over. Click Resume to continue.",
+            `${this.pauseNotice}. Click Resume to continue.`,
           );
           continue;
         }
         let output: Awaited<ReturnType<TabDriver["execute"]>>;
-        const actionEpoch = this.takeoverEpoch;
+        const actionEpoch = this.pauseEpoch;
         this.actionEpoch = actionEpoch;
         try {
           output = await this.driver.execute(command.tool, command.args);
         } catch (error) {
           if (this.abort.signal.aborted) break;
-          const interrupted = this.state.paused || actionEpoch !== this.takeoverEpoch;
+          const interrupted = this.state.paused || actionEpoch !== this.pauseEpoch;
           const code = interrupted
             ? "paused"
             : error instanceof DriverError
               ? error.code
               : "command_failed";
           const message = interrupted
-            ? "Paused: you took over"
+            ? this.pauseNotice
             : error instanceof DriverError
               ? error.message
               : "The tab command failed";
@@ -178,8 +177,8 @@ export class SharedSession {
           this.actionEpoch = undefined;
         }
         if (this.abort.signal.aborted) break;
-        if (this.state.paused || actionEpoch !== this.takeoverEpoch) {
-          await this.peer.sendError(command.id, "paused", "Paused: you took over");
+        if (this.state.paused || actionEpoch !== this.pauseEpoch) {
+          await this.peer.sendError(command.id, "paused", this.pauseNotice);
           continue;
         }
         this.log(actionSummary(command.tool));
@@ -217,28 +216,38 @@ export class SharedSession {
     this.state.actions.push(message);
     if (this.state.actions.length > 50) this.state.actions.shift();
   }
+  private recordControl(action: "pause" | "resume") {
+    this.controlEvents.push({ action, timestamp: new Date().toISOString() });
+    if (this.controlEvents.length > MAX_CONTROL_EVENTS) this.controlEvents.shift();
+  }
+  private get pauseNotice(): string {
+    return this.lastPauseNotice;
+  }
   pause() {
     if (!this.state.sharing) return;
-    this.takeoverEpoch++;
+    this.pauseEpoch++;
     this.driver.setPaused(true);
-    if (this.state.paused) return;
     this.state.paused = true;
-    this.state.notice = "Paused: you took over";
-    this.log("Paused: you took over");
+    this.recordControl("pause");
+    this.lastPauseNotice = `Paused by you at ${new Date().toISOString().slice(11, 19)} UTC`;
+    this.state.notice = this.lastPauseNotice;
+    this.log(this.state.notice);
   }
   resume() {
     if (!this.state.sharing) throw new Error("Sharing has ended");
     if (this.state.handoff) throw new Error("Click Done to finish your agent’s handoff");
+    if (!this.state.paused) return;
     this.state.paused = false;
     this.driver.setPaused(false);
     this.state.notice = undefined;
-    this.log("Resumed sharing");
+    this.recordControl("resume");
+    this.log(`Resumed sharing at ${new Date().toISOString().slice(11, 19)} UTC`);
   }
   async done() {
     const handoff = this.state.handoff;
     if (!this.state.sharing || !handoff) throw new Error("No handoff is waiting");
     if (this.handoffDelivery) return this.handoffDelivery;
-    const epoch = this.takeoverEpoch;
+    const epoch = this.pauseEpoch;
     this.commandPoll?.abort();
     const delivery = this.peer.handoffDone(handoff.id);
     this.handoffDelivery = delivery;
@@ -249,8 +258,7 @@ export class SharedSession {
     }
     if (!this.state.sharing) return;
     this.state.handoff = undefined;
-    if (epoch !== this.takeoverEpoch) {
-      this.state.notice = "Paused: you took over";
+    if (epoch !== this.pauseEpoch) {
       return;
     }
     this.state.paused = false;

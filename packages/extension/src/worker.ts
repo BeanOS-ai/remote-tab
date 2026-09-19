@@ -3,15 +3,15 @@ import { parseCode } from "@remote-tab/protocol";
 import { type Sender, record } from "./chrome";
 import { DriverError, TabDriver } from "./driver";
 import { LedgerJobs } from "./ledger-data";
+import { popupError } from "./popup-error";
 import { PrivacyGuard } from "./privacy";
 import { siteForUrl } from "./scope";
 import { SharedSession } from "./session";
-import { TakeoverError, TakeoverMonitor } from "./takeover";
 
 const ledgers = new LedgerJobs();
 let active: SharedSession | undefined;
 async function openLedger(share: SharedSession, settled?: Promise<void>) {
-  const jobId = ledgers.create(share.peer, settled);
+  const jobId = ledgers.create(share.peer, settled, share.controlEvents);
   try {
     await chrome.tabs.create({ url: chrome.runtime.getURL(`ledger.html#${jobId}`) });
   } catch {
@@ -44,7 +44,6 @@ function cancelStart() {
   if (attempt) attempt.cancelled = true;
 }
 let driver: TabDriver | undefined;
-let monitor: TakeoverMonitor | undefined;
 function trusted(sender: Sender) {
   return sender.id === chrome.runtime.id && sender.url === chrome.runtime.getURL("popup.html");
 }
@@ -69,9 +68,12 @@ async function handle(message: unknown) {
     await active?.stop();
     return { ok: true };
   }
-  if (["resume", "done", "extend"].includes(String(message.action))) {
+  if (["pause", "resume", "done", "extend"].includes(String(message.action))) {
     if (!active?.state.sharing) throw new Error("Sharing has ended");
-    if (message.action === "resume") active.resume();
+    if (message.action === "pause") active.pause();
+    if (message.action === "resume") {
+      active.resume();
+    }
     if (message.action === "done") await active.done();
     if (message.action === "extend") {
       try {
@@ -100,12 +102,11 @@ async function handle(message: unknown) {
   )
     throw new Error("Reopen the popup to choose a tab");
   starting = true;
-  const pending = { cancelled: false, paused: false };
+  const pending = { cancelled: false };
   attempt = pending;
   let attached = false;
   let selectedId: number | undefined;
   let boundShare: SharedSession | undefined;
-  let newMonitor: TakeoverMonitor | undefined;
   try {
     const tab = await chrome.tabs.get(message.tabId);
     if (tab.id !== message.tabId || tab.url !== message.url)
@@ -125,13 +126,6 @@ async function handle(message: unknown) {
         method,
         params,
       );
-    const takeover = new TakeoverMonitor(rawCdp, () => {
-      pending.paused = true;
-      boundShare?.pause();
-    });
-    newMonitor = takeover;
-    monitor = takeover;
-    await takeover.initialize();
     const cdp = (method: string, params?: Record<string, unknown>) => {
       if (pending.cancelled || boundShare?.state.sharing === false)
         throw new DriverError("stopped", "Sharing stopped");
@@ -142,18 +136,8 @@ async function handle(message: unknown) {
         "Page.handleJavaScriptDialog",
         "Page.stopLoading",
       ].includes(method);
-      if (boundShare?.interrupted && !maintenance)
-        throw new DriverError("paused", "Paused: you took over");
-      // These lifecycle barriers also run between old and new document worlds.
-      if (maintenance) return rawCdp(method, params);
-      return takeover.dispatch(method, params).catch((error) => {
-        if (error instanceof TakeoverError) {
-          pending.cancelled = true;
-          if (boundShare) boundShare.state.notice = error.message;
-          void boundShare?.stop();
-        }
-        throw error;
-      });
+      if (boundShare?.interrupted && !maintenance) throw new DriverError("paused", "Paused by you");
+      return rawCdp(method, params);
     };
     const privacy = new PrivacyGuard(cdp);
     await privacy.scan();
@@ -178,7 +162,6 @@ async function handle(message: unknown) {
       throw new Error("The tab changed while sharing started. Try again.");
     if (pending.cancelled) throw new Error("Sharing cancelled");
     boundShare = await SharedSession.connect({
-      isPaused: () => pending.paused,
       isCancelled: () => pending.cancelled,
       onStop: (share, settled) => {
         void openLedger(share, settled).catch(() => {
@@ -198,20 +181,16 @@ async function handle(message: unknown) {
         extension_version: chrome.runtime.getManifest().version,
       },
       detach: async () => {
-        void takeover.dispose();
         await chrome.debugger.detach(target);
       },
     });
     active = boundShare;
     return { ok: true };
   } catch (error) {
-    void newMonitor?.dispose();
     if (attached && selectedId !== undefined)
       await chrome.debugger.detach({ tabId: selectedId }).catch(() => {});
     driver = undefined;
     tabId = undefined;
-    if (error instanceof RemoteTabError && error.code === "already_redeemed")
-      throw new Error("This code was already used — tell your agent");
     throw error;
   } finally {
     starting = false;
@@ -232,10 +211,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   void operation.then(respond, (error) =>
     respond({
       ok: false,
-      error:
-        error instanceof Error && !(error instanceof RemoteTabError)
-          ? error.message
-          : "Could not connect. Ask your agent for a new code.",
+      error: popupError(error),
     }),
   );
   return true;
@@ -248,20 +224,17 @@ chrome.debugger.onEvent.addListener((target, method, params) => {
     cancelStart();
     return active?.stop();
   };
-  void monitor?.onEvent(method, params ?? {}, target.sessionId).catch(failed);
   if (!target.sessionId) void driver?.onEvent(method, params ?? {}).catch(failed);
 });
 chrome.debugger.onDetach.addListener((target) => {
   if (target.tabId === tabId) {
     cancelStart();
-    void monitor?.dispose();
     void active?.stop();
   }
 });
 chrome.tabs.onRemoved.addListener((id) => {
   if (id === tabId) {
     cancelStart();
-    void monitor?.dispose();
     void active?.stop();
   }
 });

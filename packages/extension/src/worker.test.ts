@@ -22,7 +22,7 @@ function deferred() {
   return { promise, resolve };
 }
 
-async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existingCapture = false) {
+async function setup(hold?: "redeem" | "status", sensitiveValue?: string) {
   const app = createApp({
     store: new MemoryStore(),
     keyResolver: new StaticKeyResolver(new Map([["test", "test-key"]]), { defaultQps: 0 }),
@@ -42,7 +42,6 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
   const fetchedTabs: number[] = [];
   const createdUrls: string[] = [];
   const cdpCalls: { method: string; params: Record<string, unknown> }[] = [];
-  let ownListenersRemoved = false;
   let holdNextWrite = false;
   let holdNextStop = false;
   let statusReads = 0;
@@ -56,7 +55,7 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
     runtime: {
       id: "installed-extension",
       getURL: (path) => `chrome-extension://installed-extension/${path}`,
-      getManifest: () => ({ version: "2.0.2" }),
+      getManifest: () => ({ version: "2.1.0" }),
       sendMessage: async () => undefined,
       onMessage: {
         addListener: (listener) => {
@@ -93,45 +92,6 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
       },
       sendCommand: async (_target, method, params = {}) => {
         cdpCalls.push({ method, params });
-        if (method === "Runtime.enable") {
-          onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
-            context: { id: 1, name: "", auxData: { isDefault: true, frameId: "main" } },
-          });
-          return {};
-        }
-        if (method === "Page.addScriptToEvaluateOnNewDocument") {
-          onEvent({ tabId: consentTab.id }, "Runtime.executionContextCreated", {
-            context: {
-              id: 2,
-              name: params.worldName,
-              auxData: { isDefault: false, frameId: "main" },
-            },
-          });
-          return { identifier: "takeover-watcher" };
-        }
-        if (method === "Runtime.evaluate" && params.expression === "this")
-          return {
-            result: { type: "object", className: "Window", objectId: `window-${params.contextId}` },
-          };
-        if (method === "DOMDebugger.getEventListeners")
-          return {
-            listeners:
-              params.objectId === "window-1"
-                ? existingCapture
-                  ? [{ type: "keydown", useCapture: true }]
-                  : []
-                : ownListenersRemoved
-                  ? []
-                  : [
-                      "keydown",
-                      "keyup",
-                      "pointerdown",
-                      "pointerup",
-                      "pointermove",
-                      "pointercancel",
-                      "wheel",
-                    ].map((type) => ({ type, useCapture: true })),
-          };
         if (method === "DOMSnapshot.captureSnapshot" && sensitiveValue)
           return {
             strings: ["main", tab.url, "INPUT", "type", "password", sensitiveValue],
@@ -235,9 +195,6 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
       holdNextStop = true;
     },
     cdpCalls,
-    removeOwnListeners: () => {
-      ownListenersRemoved = true;
-    },
     holdNextWrite: () => {
       holdNextWrite = true;
     },
@@ -254,15 +211,6 @@ async function setup(hold?: "redeem" | "status", sensitiveValue?: string, existi
     },
     event: (method: string, params: Record<string, unknown>, target = consentTab.id) =>
       onEvent({ tabId: target }, method, params),
-    humanInput: () => {
-      const binding = cdpCalls.find((call) => call.method === "Runtime.addBinding");
-      if (!binding) throw new Error("Takeover binding has not been installed");
-      onEvent({ tabId: consentTab.id }, "Runtime.bindingCalled", {
-        name: binding.params.name,
-        executionContextId: 2,
-        payload: JSON.stringify({ type: "keydown", key: "x", modifiers: 0 }),
-      });
-    },
     changeTitle: (title: string) => {
       tab = { ...tab, title };
     },
@@ -318,7 +266,7 @@ test("sharing binds the popup's consented tab instead of reselecting the active 
   expect(details.hello).toMatchObject({
     url: consentTab.url,
     title: consentTab.title,
-    extension_version: "2.0.2",
+    extension_version: "2.1.0",
   });
 });
 
@@ -388,7 +336,7 @@ test("only the exact installed popup can inspect state or perform human controls
     {},
   ];
   for (const source of invalidSenders) {
-    for (const action of ["state", "stop", "resume", "done", "extend", "share"]) {
+    for (const action of ["state", "stop", "pause", "resume", "done", "extend", "share"]) {
       const response = h.untrusted({ action, code: h.code }, source);
       expect(response.accepted).toBeUndefined();
       expect(response.responded()).toBe(false);
@@ -399,30 +347,10 @@ test("only the exact installed popup can inspect state or perform human controls
   expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, extended: false });
 });
 
-for (const phase of ["redeem", "status"] as const) {
-  test(`trusted human input during deferred ${phase} starts paused and requires explicit Resume`, async () => {
-    const h = await setup(phase);
-    const pending = h.share();
-    await h.reached.promise;
-    h.humanInput();
-    h.release.resolve();
-    expect(await pending).toEqual({ ok: true });
-    expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, paused: true });
-    const before = h.cdpCalls.length;
-    expect(await h.session.send("browser_snapshot", {}, { timeoutMs: 2000 })).toMatchObject({
-      ok: false,
-      error: { code: "paused" },
-    });
-    expect(h.cdpCalls).toHaveLength(before);
-    expect(await h.message({ action: "resume" })).toEqual({ ok: true });
-    expect(await h.message({ action: "state" })).toMatchObject({ sharing: true, paused: false });
-  });
-}
-
 test("paused human navigation still resolves Fetch interception while agent actions stay denied", async () => {
   const h = await setup();
   expect(await h.share()).toEqual({ ok: true });
-  h.humanInput();
+  await h.message({ action: "pause" });
   expect(await h.message({ action: "state" })).toMatchObject({ paused: true });
   h.event("Fetch.requestPaused", {
     requestId: "human-same-site",
@@ -473,7 +401,7 @@ test("sensitive metadata is redacted in hello and never reintroduced by popup st
   ).not.toContain(secret);
 });
 
-test("human input while Done is awaiting delivery preserves the new takeover pause", async () => {
+test("explicit Pause while Done is awaiting delivery preserves the new pause", async () => {
   const h = await setup();
   expect(await h.share()).toEqual({ ok: true });
   const handedBack = h.session.handoff("Please confirm");
@@ -490,7 +418,7 @@ test("human input while Done is awaiting delivery preserves the new takeover pau
   h.holdNextWrite();
   const done = h.message({ action: "done" });
   await h.reached.promise;
-  h.humanInput();
+  await h.message({ action: "pause" });
   h.release.resolve();
   expect(await done).toEqual({ ok: true });
   await handedBack;
@@ -501,44 +429,6 @@ test("human input while Done is awaiting delivery preserves the new takeover pau
     error: { code: "paused" },
   });
   expect(h.cdpCalls).toHaveLength(before);
-});
-
-test("preexisting page capture handler refuses sharing before redemption and detaches", async () => {
-  const h = await setup(undefined, undefined, true);
-  expect(await h.share()).toEqual({
-    ok: false,
-    error: "This page prevents reliable takeover monitoring. Sharing is unavailable.",
-  });
-  expect(h.attached).toEqual([consentTab.id]);
-  expect(h.detached).toContain(consentTab.id);
-  expect(h.requests).toHaveLength(0);
-  expect(
-    h.cdpCalls.some(
-      (call) =>
-        call.method === "DOMDebugger.getEventListeners" && call.params.objectId === "window-1",
-    ),
-  ).toBe(true);
-  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false, starting: false });
-  expect((await h.session.status()).redeemed).toBe(false);
-});
-
-test("missing takeover listeners terminate sharing before the next screenshot without a lifecycle event", async () => {
-  const h = await setup();
-  expect(await h.share()).toEqual({ ok: true });
-  const before = h.cdpCalls.length;
-  h.removeOwnListeners();
-  await expect(
-    h.session.send("browser_take_screenshot", {}, { timeoutMs: 2000 }),
-  ).rejects.toMatchObject({ code: "session_not_active" });
-  await until(() => h.detached.includes(consentTab.id));
-  expect(
-    h.cdpCalls.slice(before).some((call) => call.method === "DOMDebugger.getEventListeners"),
-  ).toBe(true);
-  expect(
-    h.cdpCalls.slice(before).filter((call) => call.method === "Page.captureScreenshot"),
-  ).toHaveLength(0);
-  expect(await h.message({ action: "state" })).toMatchObject({ sharing: false });
-  expect((await h.session.status()).state).toBe("stopped");
 });
 
 test("Stop detaches and opens one local ledger before a delayed server stop completes", async () => {
@@ -597,4 +487,38 @@ test("only the matching installed ledger page can retrieve its job", async () =>
   expect(await h.message({ action: "ledger-status", jobId })).toMatchObject({ ok: false });
   const ledger = await loadLedger(jobId, (value) => h.ledgerMessage(jobId, value));
   expect(ledger.status.state).toBe("stopped");
+});
+
+test("only explicit Pause pauses; Resume re-enables sharing and ledger records both controls", async () => {
+  const h = await setup();
+  expect(await h.share()).toEqual({ ok: true });
+  expect(
+    h.cdpCalls.some(({ method }) =>
+      ["Runtime.addBinding", "DOMDebugger.getEventListeners"].includes(method),
+    ),
+  ).toBe(false);
+  h.event("Runtime.bindingCalled", {
+    name: "old-takeover",
+    executionContextId: 2,
+    payload: JSON.stringify({ type: "pointerdown", timestamp: Date.now() }),
+  });
+  h.event("Page.frameNavigated", { frame: { id: "main", url: consentTab.url } });
+  expect(await h.message({ action: "state" })).toMatchObject({ paused: false });
+  expect(await h.message({ action: "pause" })).toEqual({ ok: true });
+  const state = await h.message({ action: "state" });
+  expect(state).toMatchObject({
+    paused: true,
+    notice: expect.stringMatching(/^Paused by you at .* UTC$/),
+  });
+  const result = await h.session.send("browser_snapshot", {}, { timeoutMs: 2000 });
+  expect(result).toMatchObject({ ok: false, error: { code: "paused" } });
+  expect(await h.message({ action: "resume" })).toEqual({ ok: true });
+  expect(await h.message({ action: "state" })).toMatchObject({ paused: false });
+  await h.message({ action: "pause" });
+  await h.message({ action: "stop" });
+  const jobId = new URL(h.createdUrls[0]).hash.slice(1);
+  const ledger = await loadLedger(jobId, (value) => h.ledgerMessage(jobId, value));
+  expect(ledger.controlEvents?.map(({ action }) => action)).toEqual(["pause", "resume", "pause"]);
+  for (const event of ledger.controlEvents ?? [])
+    expect(Number.isFinite(Date.parse(event.timestamp))).toBe(true);
 });

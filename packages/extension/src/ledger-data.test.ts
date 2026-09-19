@@ -7,6 +7,7 @@ import {
   randomSecret,
   unb64url,
 } from "@remote-tab/protocol/src/crypto";
+import { type ControlEvent, MAX_CONTROL_EVENTS } from "./control-events";
 import { LEDGER_CHUNK_BYTES, LedgerJobs, type LedgerRpc, loadLedger } from "./ledger-data";
 
 const ids: [LedgerJobs, string][] = [];
@@ -162,6 +163,85 @@ test("failed Stop exports the actual nonterminal status, never a fabricated stop
   const jobs = new LedgerJobs();
   const id = create(jobs, ledger, Promise.reject(new Error("remote unavailable")));
   expect((await loadLedger(id, transport(jobs), { pollMs: 0 })).status.state).toBe("active");
+});
+
+test("Pause without a later command survives transfer, isolated from later Resume and source mutation", async () => {
+  const ledger = await fixture();
+  ledger.entries = [];
+  Object.assign(ledger.status, { state: "active", last_seq: 0, last_hash: "" });
+  const pause = { action: "pause" as const, timestamp: "2026-09-19T12:00:00.000Z" };
+  const expected = structuredClone(pause);
+  const controls: ControlEvent[] = [pause];
+  let settled = () => {};
+  const after = new Promise<void>((resolve) => {
+    settled = resolve;
+  });
+  const jobs = new LedgerJobs();
+  const id = jobs.create(
+    { sessionId: ledger.sessionId, ledger: async () => ledger },
+    after,
+    controls,
+  );
+  ids.push([jobs, id]);
+  pause.timestamp = "2026-09-19T12:01:00.000Z";
+  controls.push({ action: "resume", timestamp: "2026-09-19T12:02:00.000Z" });
+  settled();
+  const restored = await loadLedger(id, transport(jobs), { pollMs: 0 });
+  expect(restored.entries).toEqual([]);
+  expect(restored.status).toEqual(ledger.status);
+  expect(restored.controlEvents).toEqual([expected]);
+  expect(Object.isFrozen(restored.controlEvents)).toBe(true);
+  expect(Object.isFrozen(restored.controlEvents?.[0])).toBe(true);
+});
+
+test("local human controls reject invalid actions, timestamps and unbounded metadata", async () => {
+  const ledger = await fixture();
+  const peer = { sessionId: ledger.sessionId, ledger: async () => ledger };
+  const pause = { action: "pause", timestamp: "2026-09-19T12:00:00.000Z" };
+  const jobs = new LedgerJobs();
+  for (const invalidControls of [
+    null,
+    [{ ...pause, action: "automatic_takeover" }],
+    [{ ...pause, timestamp: "yesterday" }],
+    [{ ...pause, timestamp: "2026-02-30T12:00:00.000Z" }],
+    Array.from({ length: MAX_CONTROL_EVENTS + 1 }, () => pause),
+  ]) {
+    expect(() => jobs.create(peer, Promise.resolve(), invalidControls as ControlEvent[])).toThrow(
+      "Ledger verification failed",
+    );
+  }
+  const controls = Array.from({ length: MAX_CONTROL_EVENTS }, () => pause) as ControlEvent[];
+  const id = jobs.create(peer, Promise.resolve(), controls);
+  ids.push([jobs, id]);
+  expect((await loadLedger(id, transport(jobs), { pollMs: 0 })).controlEvents).toHaveLength(
+    MAX_CONTROL_EVENTS,
+  );
+});
+
+test("viewer validates local control metadata even when transfer checksum matches", async () => {
+  const ledger = await fixture();
+  const jobs = new LedgerJobs();
+  const id = create(jobs, ledger);
+  await ready(jobs, id);
+  const metadata = JSON.parse(
+    new TextDecoder().decode(unb64url(jobs.chunk(id, "metadata", 0).data)),
+  );
+  metadata.controlEvents = [{ action: "takeover", timestamp: "2026-09-19T12:00:00.000Z" }];
+  const bytes = new TextEncoder().encode(JSON.stringify(metadata));
+  const hash = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (n) =>
+    n.toString(16).padStart(2, "0"),
+  ).join("");
+  const rpc = transport(jobs);
+  await expect(
+    loadLedger(id, async (message) => {
+      const m = message as { action: string; kind?: string };
+      if (m.action === "ledger-status")
+        return { ...jobs.status(id), metadataBytes: bytes.length, metadataSha256: hash };
+      if (m.action === "ledger-chunk" && m.kind === "metadata")
+        return { offset: 0, total: bytes.length, data: b64url(bytes) };
+      return rpc(message);
+    }),
+  ).rejects.toMatchObject({ code: "ledger_invalid" });
 });
 
 for (const kind of ["metadata", "attachment"] as const) {
