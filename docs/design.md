@@ -133,7 +133,7 @@ domain) instead. It is still just a dead drop: it assigns sequence numbers,
 checks tokens, and stores blobs. With independently trusted client code, end-to-end encryption means the
 server, its operator, and the store see ciphertext only. For that promise to survive a
 compromised server, human-side code must come from the installed extension.
-Agents may deliberately trust server-supplied bootstrap source (§5.5–5.6);
+Agents may deliberately trust server-supplied bootstrap source (§5.5–5.7);
 the server is an API, not a web application.
 
 ### 5.2 Crypto (deliberately boring)
@@ -164,7 +164,7 @@ optional platform API key for create, `agent_token` or `browser_token` afterward
 With `REMOTE_TAB_API_KEYS` unset or empty, creation is open, including requests
 carrying a bearer. When configured, a matching platform key is required. Both
 modes enforce the throttles in §10.
-The additional agent bootstrap routes are specified in §5.6; the server
+The additional agent bootstrap routes are specified in §5.7; the server
 serves no pages (§5.5).
 
 | Method + path | Who | Purpose |
@@ -234,7 +234,50 @@ surface. No HTML and no JavaScript executed by a browser; source files are
 plain downloads for agents. Everything else returns 404. Code handoff stays
 private; ledger viewing and any future livestream remain installed clients.
 
-### 5.6 Agent bootstrap without GitHub or npm (2026-09-18 addendum)
+### 5.6 Key service contract
+
+Operator decision (2026-09-18): open source API optional; BeanOS runs the key
+service and tiers outside this repo. This is the design for the next server
+revision, implemented separately after this amendment merges. The server
+handles opaque identity and numeric limits only: no email, billing, key
+issuance, or tier-specific product logic belongs here.
+
+- `KeyResolver.resolve(key)` returns `{tier: string, qps: number, subject: string}`
+  or `null`. `StaticKeyResolver` reads comma-separated
+  `REMOTE_TAB_API_KEYS=platform:key[:qps]` entries, including the existing
+  two-field form. `HttpKeyResolver` uses `REMOTE_TAB_KEY_SERVICE_URL` and
+  `REMOTE_TAB_KEY_SERVICE_TOKEN`: authenticated `GET <url>/resolve?key=<sha256>`
+  with a bearer service token. The query contains lowercase hex SHA-256 of
+  the presented key, never the raw key. Positive cache TTL is
+  `REMOTE_TAB_KEY_CACHE_SECONDS` (default 300 seconds); negative results cache
+  for 60 seconds. Key-service failures fail closed for keyed requests;
+  anonymous requests do not contact or depend on that service.
+- Anonymous calls use per-client-IP QPS from `REMOTE_TAB_ANONYMOUS_QPS`
+  (default 10; 0 requires keys). Keyed calls use the resolved QPS; 0 means
+  unlimited. All API calls count, including each long-poll request once.
+  Exceeding a limit returns 429, JSON `error: "rate_limited"`, and integer
+  `Retry-After` seconds. Existing active-session caps, message counts, and blob
+  budgets remain as independent backstops.
+- Use a pinned `rate-limiter-flexible` runtime dependency and its
+  `RateLimiterMemory`, with `points = qps`, `duration = 1` second, keyed by
+  resolved subject or client IP. This is a one-second window allowance, with
+  no custom bucket implementation. Limits are per server instance; multiple
+  instances multiply the allowance. The same library can use a shared
+  Redis/Postgres backend if global rate limits become necessary.
+- `UsageSink` accepts `{subject | ip, tier, kind, amount, at}` events; `kind`
+  is `session_created`, `message`, `blob_bytes`, or `throttled`. Subjects and
+  IPs are separate identity types. Default `LogUsageSink` aggregates amounts
+  by identity, tier, and kind per minute, then writes one structured JSON
+  line per aggregate. Optional `HttpUsageSink` uses `REMOTE_TAB_USAGE_URL`
+  and the same service token to POST event batches. Reporting is best effort,
+  bounded, and never blocks or changes an API response; no raw keys, tokens,
+  secrets, URLs, or message contents enter usage events.
+- `/docs` explains anonymous versus keyed access, presenting platform keys
+  using `Authorization: Bearer`, and that the server operator supplies its
+  keys and tiers. BeanOS operates its own external key service; documentation
+  uses a deployment-replaceable placeholder link, never a BeanOS domain.
+
+### 5.7 Agent bootstrap without GitHub or npm (2026-09-18 addendum)
 
 - `GET /docs` returns `text/markdown; charset=utf-8`: a self-contained agent
   quick-start covering the pasted code, all §5.3 requests and responses,
