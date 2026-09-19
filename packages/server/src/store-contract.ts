@@ -13,8 +13,9 @@ export interface StorePair {
   a: Store;
   b: Store;
   close(): Promise<void>;
+  trace?(phase: string): void;
 }
-export type StoreFactory = (now: () => Date) => Promise<StorePair>;
+export type StoreFactory = (now: () => Date, title: string) => Promise<StorePair>;
 export const newSessionId = () => crypto.randomUUID().replaceAll("-", "");
 export function sessionRecord(now: Date, overrides: Partial<SessionRecord> = {}): SessionRecord {
   return {
@@ -57,7 +58,7 @@ export function storeContract(name: string, factory: StoreFactory) {
       test(title, async () => {
         let time = Date.now();
         const now = () => new Date(time);
-        const pair = await factory(now);
+        const pair = await factory(now, title);
         try {
           await run({
             ...pair,
@@ -122,24 +123,42 @@ export function storeContract(name: string, factory: StoreFactory) {
     );
     contract(
       "concurrent appends publish one predecessor winner and a verifiable chain",
-      async ({ a, b, now }) => {
+      async ({ a, b, now, trace }) => {
         const record = sessionRecord(now());
+        trace?.("create:start");
         await a.createSession(record);
+        trace?.("create:done; concurrent appends:start");
+        const observedAppend = async (store: Store, label: string) => {
+          try {
+            const result = await append(store, record.id, label);
+            trace?.(`append ${label}:fulfilled`);
+            return result;
+          } catch (error) {
+            trace?.(`append ${label}:rejected ${error instanceof Error ? error.name : "unknown"}`);
+            throw error;
+          }
+        };
         const results = await Promise.allSettled([
-          append(a, record.id, "one"),
-          append(b, record.id, "two"),
+          observedAppend(a, "one"),
+          observedAppend(b, "two"),
         ]);
+        trace?.("concurrent appends:done");
         expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
         expect(
           (results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason,
         ).toBeInstanceOf(ChainMismatch);
+        trace?.("list:start");
         const messages = await b.listMessages(record.id, 0, 200);
+        trace?.("list:done; verifyChain:start");
         expect(messages).toHaveLength(1);
         expect(await verifyChain(record.id, messages)).toEqual({ ok: true });
+        trace?.("verifyChain:done; getSession:start");
         expect((await a.getSession(record.id))?.lastHash).toBe(messages[0].hash);
+        trace?.("getSession:done; explicit mismatch:start");
         await expect(append(a, record.id, "bad predecessor", "wrong")).rejects.toBeInstanceOf(
           ChainMismatch,
         );
+        trace?.("explicit mismatch:done");
       },
     );
     contract("concurrent append cap permits exactly one publication", async ({ a, b, now }) => {

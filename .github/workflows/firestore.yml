@@ -61,4 +61,10 @@ jobs:
             echo 'Firestore emulator did not become ready within the startup bound' >&2
             exit 1
           fi
-          bun test packages/store-gcp/src/firestore-store.test.ts --timeout 60000
+          # Isolate the predecessor race first so a stuck phase fails promptly.
+          timeout --signal=TERM --kill-after=10s 90s \
+            bun test packages/store-gcp/src/firestore-store.test.ts --timeout 60000 \
+              --test-name-pattern "concurrent appends publish one predecessor winner"
+          # A leaked SDK handle must fail the step instead of consuming the job limit.
+          timeout --signal=TERM --kill-after=10s 240s \
+            bun test packages/store-gcp/src/firestore-store.test.ts --timeout 60000

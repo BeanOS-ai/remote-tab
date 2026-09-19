@@ -20,7 +20,23 @@ class MemoryBlobs implements BlobStore {
     return entry ? new Uint8Array(entry.bytes) : null;
   }
 }
-async function fixture(now: () => Date) {
+async function cleanupStage(label: string, run: () => Promise<unknown>) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      run(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Firestore fixture cleanup timed out: ${label}`)),
+          10_000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function fixture(now: () => Date, title?: string) {
   if (!emulator)
     throw new Error("FIRESTORE_EMULATOR_HOST must be configured for integration tests");
   // Isolate admission/active as well as session documents without clearing another test's data.
@@ -28,17 +44,33 @@ async function fixture(now: () => Date) {
   const projectId = `${prefix.slice(0, 20)}-${crypto.randomUUID().slice(0, 8)}`;
   const clients = [new Firestore({ projectId }), new Firestore({ projectId })];
   const blobs = new MemoryBlobs();
+  const started = Date.now();
+  const trace =
+    title === "concurrent appends publish one predecessor winner and a verifiable chain"
+      ? (phase: string) =>
+          console.info(`[Firestore append race ${projectId} +${Date.now() - started}ms] ${phase}`)
+      : undefined;
   return {
     a: new GcpStore({ firestore: clients[0], blobs, now }),
     b: new GcpStore({ firestore: clients[1], blobs, now }),
     clients,
     blobs,
+    trace,
     close: async () => {
       try {
-        await clients[0].recursiveDelete(clients[0].collection("sessions"));
-        await clients[0].doc("admission/active").delete();
+        trace?.("cleanup sessions:start");
+        await cleanupStage("recursiveDelete sessions", () =>
+          clients[0].recursiveDelete(clients[0].collection("sessions")),
+        );
+        trace?.("cleanup sessions:done; admission delete:start");
+        await cleanupStage("delete admission", () => clients[0].doc("admission/active").delete());
+        trace?.("admission delete:done");
       } finally {
-        await Promise.all(clients.map((client) => client.terminate()));
+        trace?.("terminate clients:start");
+        await cleanupStage("terminate clients", () =>
+          Promise.all(clients.map((client) => client.terminate())),
+        );
+        trace?.("terminate clients:done");
       }
     },
   };
