@@ -326,8 +326,10 @@ issuance, or tier-specific product logic belongs here.
   secrets, URLs, or message contents enter usage events.
 - `/docs` explains anonymous versus keyed access, presenting platform keys
   using `Authorization: Bearer`, and that the server operator supplies its
-  keys and tiers. BeanOS operates its own external key service; documentation
+  keys and tiers. BeanOS operates its own external key service; generic guidance
   uses a deployment-replaceable placeholder link, never a BeanOS domain.
+  A clearly delimited hosted-service section may document that deployment's
+  URLs and key onboarding; self-hosters should skip it and issue their own keys.
 
 ### 5.7 Agent bootstrap without GitHub or npm (2026-09-18 addendum)
 
