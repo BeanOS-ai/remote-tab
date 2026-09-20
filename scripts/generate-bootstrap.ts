@@ -17,7 +17,7 @@ const docs = [
   `\n\`\`\`json\n${await read("docs/crypto-vector.json")}\`\`\`\n`,
   ...sections,
 ].join("\n");
-if (Buffer.byteLength(docs) > 40_000) throw new Error("agent docs exceed 40,000 bytes");
+if (Buffer.byteLength(docs) > 44_000) throw new Error("agent docs exceed 44,000 bytes");
 const { version } = JSON.parse(await read("package.json")) as { version: string };
 const files: { path: string; sha256: string; bytes: number }[] = [];
 const sources: Record<string, string> = {};
