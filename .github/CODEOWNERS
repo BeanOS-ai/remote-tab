@@ -1,0 +1,7 @@
+# Every path is owned by the repository owner.
+#
+# Paired with the `protect-main` ruleset's `require_code_owner_review`: with no
+# CODEOWNERS file that setting silently owns nothing and approves everything,
+# so this file is what makes it real. Keep the catch-all line last and keep at
+# least one owner on every path — an unowned path is an unreviewed path.
+*       @giladpagi
