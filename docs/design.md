@@ -655,8 +655,13 @@ there is no dual-read migration or shared state between the two adapters.
   distribution channel (Web Store, npm) is outside this model, as it is for
   any installed software.
 - **Malicious page.** Snapshot text and eval output are data. The extension
-  executes nothing from the page. Credential and payment fields are never
-  captured. The agent-side tool descriptions carry the same warning.
+  executes nothing from the page, and `browser_evaluate` runs in an isolated
+  world so page script cannot redefine what the agent reads back. Fields the
+  page marks as credential or payment are not captured — a best effort that
+  depends on the page labelling them (`sensitive()` matches `type="password"`
+  and the `one-time-code` / `cc-*` autocomplete tokens), so a page collecting
+  secrets in ordinary text fields defeats it. The agent-side tool descriptions
+  carry the same warning.
 - **Agent overreach.** Mode and scope are enforced in the extension, not the
   agent. Read-only cannot click; "this site only" cannot leave; nothing can
   extend the TTL from the agent side.

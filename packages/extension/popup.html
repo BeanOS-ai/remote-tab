@@ -33,7 +33,7 @@
   <details><summary>Details</summary><div class="details-content">
     <p>Only the tab shown above is shared. Use <strong>Pause agent</strong> before working alongside your agent; typing, clicking and navigating do not pause it automatically. <strong>Stop</strong> ends sharing.</p>
     <p>Chrome’s debugging bar means the agent can control the shared tab. Dismissing it ends sharing.</p>
-    <p>Password, one-time-code and payment fields are private. After protected fields are encountered, scripting and console/network inspection stay unavailable for this share.</p>
+    <p>Fields the page marks as a password, one-time code or payment detail are hidden from the agent, and once one is seen, scripting and console/network inspection stay unavailable for the rest of this share. This is a best effort, not a guarantee: it relies on the page labelling those fields, so treat a page that handles secrets in ordinary text fields as if the agent can read them.</p>
   </div></details>
 </main>
 <footer><span>by BeanOS.ai</span><a href="https://beanos.ai/remote-tab" target="_blank" rel="noopener noreferrer">Details and help <span aria-hidden="true">↗</span></a></footer>

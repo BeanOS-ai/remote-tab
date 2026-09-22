@@ -786,6 +786,15 @@ export class TabDriver {
     } else if (tool === "browser_evaluate") {
       const evaluated = await this.send("Runtime.evaluate", {
         expression: `(${required(args, "function")})()`,
+        // Isolated world, like every other evaluation this driver performs
+        // (DOM.resolveNode and the wait-for-text helper both pass
+        // `executionContextId`). Without a context the expression runs in the
+        // page's MAIN world: it shares globals with page script, so a hostile
+        // page can redefine JSON.stringify or proxy DOM getters and change
+        // what the agent reads back, and the agent's own expression becomes
+        // visible to the page. `Runtime.evaluate` spells this `contextId`,
+        // not `executionContextId` — the name the sibling calls use.
+        contextId: await this.world(),
         returnByValue: true,
         awaitPromise: true,
         timeout: 10000,
