@@ -528,3 +528,20 @@ test("literal printable symbols use physical keys and literal plus is accepted",
     expect(sent?.params.windowsVirtualKeyCode).toBe(code);
   }
 });
+
+test("browser_evaluate runs in the isolated world, not the page's main world", async () => {
+  // Without a context, Runtime.evaluate runs in the MAIN world: the agent's
+  // expression shares globals with page script, so a hostile page can redefine
+  // JSON.stringify or proxy DOM getters and change what the agent reads back,
+  // and the expression itself becomes visible to the page. Every other
+  // evaluation in the driver already uses the isolated world; this one did not.
+  const f = fixture({ mode: "full" });
+  await f.driver.execute("browser_evaluate", { function: "() => 42" });
+  const evaluate = f.calls.find((call) => call.method === "Runtime.evaluate");
+  expect(evaluate).toBeDefined();
+  // Runtime.evaluate spells it `contextId`; the sibling calls use
+  // `executionContextId`. Passing the wrong name here would be silently
+  // ignored and land back in the main world, so assert the exact key.
+  expect(evaluate?.params.contextId).toBe(42);
+  expect(f.count("Page.createIsolatedWorld")).toBeGreaterThan(0);
+});
