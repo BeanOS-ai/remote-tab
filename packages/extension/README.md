@@ -48,8 +48,11 @@ per Gilad's September 19 direction. The minor bump marks that behavior change.
 After review and merge, the operator repackages the private ZIP; no store or
 public-bucket release is part of this change.
 
-Password, one-time-code, and payment-card fields are scrubbed from results and
-masked locally in screenshots; embedded frames are masked in full. Full-mode
+Fields the page marks as password, one-time-code, or payment-card are scrubbed
+from results and masked locally in screenshots; embedded frames are masked in
+full. That marking is what detection keys on, so this is a best effort rather
+than a guarantee: a page that collects a secret in an ordinary text field is
+not detected. Full-mode
 scripting and console/network inspection are refused for the rest of a share
 once protected fields or uninspected frames are encountered. Diagnostic buffers
 are discarded at that boundary.
