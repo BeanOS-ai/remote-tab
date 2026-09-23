@@ -93,6 +93,7 @@ Codex: add to `~/.codex/config.toml`:
 command = "bun"
 args = ["/absolute/path/to/remote-tab/packages/mcp/src/main.ts"]
 env_vars = ["REMOTE_TAB_SERVER_URL", "REMOTE_TAB_API_KEY"]
+tool_timeout_sec = 150
 ```
 
 Call `remote_tab_create`, deliver its code privately to the intended human,
