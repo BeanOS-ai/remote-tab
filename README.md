@@ -10,7 +10,7 @@ last_reviewed: 2026-09-23
 
 [![Watch Remote Tab: pair, share a tab, and review the interaction](docs/media/demo.gif)](docs/media/demo.mp4)
 
-[Watch the full demo](docs/media/demo.mp4) · [Agent skill](skills/remote-tab/SKILL.md) · [Self-hosting](docs/self-hosting.md)
+[Watch the 93-second demo](docs/media/demo.mp4) · [Agent skill](skills/remote-tab/SKILL.md) · [Self-hosting](docs/self-hosting.md)
 
 ## Why
 
@@ -42,9 +42,12 @@ stop it immediately.
 
 | Share with visibility | Choose read-only | Pause at any time |
 | --- | --- | --- |
-| ![Sharing controls and recent activity](docs/media/popup-sharing.png) | ![Read-only access](docs/media/popup-readonly.png) | ![Paused session](docs/media/popup-paused.png) |
+| ![Sharing controls and recent activity](docs/media/popup-sharing.png) | ![Read-only access](docs/media/popup-readonly-default.png) | ![Paused session](docs/media/popup-paused.png) |
 
-![Verified interaction summary with screenshots](docs/media/ledger-summary.png)
+After Stop, the extension opens the verified interaction summary automatically.
+Save a ZIP or render a GIF directly in the summary page.
+
+![Verified interaction summary with screenshots](docs/media/interaction-summary.png)
 
 ## Quick start
 
@@ -133,6 +136,7 @@ The pairing code is `rt1.` followed by a 22-character base64url secret:
 **26 characters total**. The client generates a fresh 128-bit secret and
 derives the session ID locally; the extension derives the same ID. The secret
 travels privately between agent and human and is never sent to the server.
+Codes are one-use and must be redeemed within 10 minutes, before session expiry.
 Old three-part codes are rejected.
 
 ## Security model
