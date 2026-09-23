@@ -71,6 +71,7 @@ bun "$CLI" create --state "$STATE" --ttl 1800
 # Deliver the returned code privately, then wait for the human to Share.
 bun "$CLI" wait-ready --state "$STATE"
 bun "$CLI" browser_snapshot '{}' --state "$STATE"
+# Replace e1 with a ref from the latest snapshot; only click for an agreed task.
 bun "$CLI" browser_click '{"ref":"e1"}' --state "$STATE"
 bun "$CLI" handoff '{"message":"Please finish sign-in and click Done."}' --state "$STATE"
 bun "$CLI" stop --state "$STATE"

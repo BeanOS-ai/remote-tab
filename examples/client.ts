@@ -15,7 +15,7 @@ export async function inspectSharedTab(deliverCode: (code: string) => Promise<vo
   });
 
   try {
-    // Ask the human to select a tab, read mode, and scope, then press Share.
+    // Ask the human to select a tab, read mode, and scope, then press Read my tab.
     // A valid hello proves code possession, not the human's identity.
     await deliverCode(code);
     await session.waitReady({ timeoutMs: 120_000 });
