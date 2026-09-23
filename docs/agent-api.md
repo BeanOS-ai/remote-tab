@@ -1,12 +1,12 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-19
-last_reviewed: 2026-09-19
+last_updated: 2026-09-23
+last_reviewed: 2026-09-23
 ---
 
 ## Agent quick-start and wire examples
 
-You need the server origin. Open deployments (including BeanOS) need no platform
+You need the server origin. Open deployments need no platform
 API key; ask the operator for a key if anonymous access is disabled (401). Replace
 `$SERVER`, `$ID`, and the curly-brace placeholders below with your values.
 Keep tokens, the secret, and the code out of logs, public issues, URLs and
@@ -50,8 +50,8 @@ keys use `Authorization: Bearer {platform-api-key}` on create and bootstrap
 still authorize session routes; the server inherits the creator's key policy,
 not the raw platform key. Tokenless redeem uses that same policy. CLI/MCP keys
 are optional. A supplied invalid key never falls back to anonymous access.
-Keys and tiers come from the server operator; BeanOS operates an external
-[key service](https://key-service.example) (distribution-owned placeholder).
+Keys and tiers come from the server provider; ask them for their key-service
+URL and access policy.
 
 Every API call, including long polls, consumes subject or caller-IP QPS.
 Anonymous defaults to 10 QPS; 0 requires keys. Keyed 0 means unlimited.
@@ -107,10 +107,6 @@ Relay limits are 20 requests/second for `unverified` and 60 requests/second
 for `verified`. Key-service limits are at most 10 key mints/hour and 3
 email-verification requests/hour. When throttled, follow the existing
 [429 guidance](#authentication-json-and-errors).
-
-The `internal` tier is unlimited, exists for BeanOS deployments and patrons,
-and is issued by an operator only; it is **not self-serve**. Internal keys
-reject email attachment with HTTP 403 `internal_key_immutable`.
 
 ### Create and redeem
 

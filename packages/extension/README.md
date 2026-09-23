@@ -1,7 +1,7 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-19
-last_reviewed: 2026-09-19
+last_updated: 2026-09-23
+last_reviewed: 2026-09-23
 ---
 
 # Remote Tab Chrome extension
@@ -43,10 +43,8 @@ command stays interrupted even if the human quickly resumes. Chrome's debugging
 bar is expected. The popup and interaction summary show timestamped local
 Pause/Resume records; these are separate from the verified encrypted command chain.
 
-Version 2.1.0 fixes #28/#29 and replaces automatic takeover with explicit controls
-per Gilad's September 19 direction. The minor bump marks that behavior change.
-After review and merge, the operator repackages the private ZIP; no store or
-public-bucket release is part of this change.
+Explicit Pause/Resume replaced automatic takeover in version 2.1.0
+(2026-09-19). Human activity alone does not interrupt sharing.
 
 Fields the page marks as password, one-time-code, or payment-card are scrubbed
 from results and masked locally in screenshots; embedded frames are masked in
@@ -90,12 +88,10 @@ writes under ignored `dist/`. No upload or publication occurs.
 
 The extension is named **Remote Tab**, with the attribution **by BeanOS.ai**.
 The release artifact basename is `remote-tab-<version>.zip`; packaging does not
-update the public Web Store listing or the separate legacy Bean Tab Share tool.
-Only `tabs`, `debugger`, and `notifications` permissions are needed; all script execution and
-monitoring use CDP. The generic build accepts only `rt1.` codes. BeanOS carries
-its one-release 1.1.2 compatibility shim in its distribution during M4 because
-that path requires additional deployment-owned GCS/paste-bin hosts. Remove the
-shim in 2.1; those hosts never enter this generic build.
+publish or update a Web Store listing.
+Only `tabs`, `debugger`, and `notifications` permissions are needed; all script
+execution and monitoring use CDP. The generic build accepts only `rt1.` codes;
+legacy compatibility adapters belong in separate distributions.
 
 Verification: `bun test packages/extension tests/e2e/extension*.test.ts` exercises
 fake-CDP enforcement and the real encrypted driver loop. With Playwright and
@@ -147,9 +143,8 @@ inspection or screenshot mask fails after navigation, the response succeeds
 with `navigated: true`, `content_unavailable: "privacy"`, and an extension-owned
 `reason`/`message`, omitting page content and screenshots. Redaction limits are
 unchanged. A changing embedded-frame geometry regression reproduces this case;
-CNN's exact original trigger remains unverified (live access was broker-denied).
+Live-site behavior still requires manual acceptance testing.
 
-The operator reviews/merges and rebuilds the private `remote-tab-2.2.0.zip`.
-This display rename does not change extension identity; no store or public
-bucket publication is part of this change. See [handoff evidence](../../docs/evidence/handoff/README.md)
+Changing the display name does not change extension identity. Packaging and
+store publication are separate release steps. See [handoff evidence](../../docs/evidence/handoff/README.md)
 and [popup evidence](../../docs/evidence/popup/README.md).

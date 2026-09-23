@@ -1,18 +1,16 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-19
-last_reviewed: 2026-09-19
+last_updated: 2026-09-23
+last_reviewed: 2026-09-23
 ---
 
 # remote-tab — design
 
-Status: **approved design; M1–M3 implemented; M4 cutover and M5 public release remain**. Decisions recorded here were made by Gilad on
-2026-09-18; the open questions at the end are the ones still his to make.
-License: MIT (decided 2026-09-18).
-Lineage: BeanOS "tab-share" (monorepo `deployments/beanhome/docs/tab-share.md`,
-extension "Bean Tab Share" 1.1.2, skill `beanos-tab-share`). remote-tab is the
-productised successor; the trust model is inherited, the transport is
-redesigned.
+Status: **implemented design**. Maintainers record decisions and remaining
+release work here. License: MIT (decided 2026-09-18).
+
+Remote Tab succeeds the earlier tab-share implementation with a redesigned
+transport and an installed-client trust model.
 
 ## 1. One paragraph
 
@@ -66,7 +64,7 @@ Non-goals (v1), explicitly deferred:
 
 ## 4. Session lifecycle
 
-The operator-approved 2026-09-18 amendment uses the short code and derived id
+The 2026-09-18 design amendment uses the short code and derived id
 below. The extension implements this format from version 2.0.1; the previous
 three-part format was never distributed.
 
@@ -244,8 +242,8 @@ private; ledger viewing and any future livestream remain installed clients.
 
 ### 5.6 Key service contract
 
-Operator decision (2026-09-18): open source API optional; BeanOS runs the key
-service and tiers outside this repo. The server implements the separately approved contract below. The server
+Decision (2026-09-18): API keys are optional; server providers run key
+services and tiers outside this repo. The server implements the contract below. The server
 handles opaque identity and numeric limits only: no email, billing, key
 issuance, or tier-specific product logic belongs here.
 
@@ -326,8 +324,7 @@ issuance, or tier-specific product logic belongs here.
   secrets, URLs, or message contents enter usage events.
 - `/docs` explains anonymous versus keyed access, presenting platform keys
   using `Authorization: Bearer`, and that the server operator supplies its
-  keys and tiers. BeanOS operates its own external key service; generic guidance
-  uses a deployment-replaceable placeholder link, never a BeanOS domain.
+  keys and tiers. Generic guidance leaves key-service deployment to the provider.
   A clearly delimited hosted-service section may document that deployment's
   URLs and key onboarding; self-hosters should skip it and issue their own keys.
 
@@ -445,8 +442,8 @@ Behaviour:
   Diagnostic buffers are cleared on Pause and no events are collected while
   paused. Protected-field scanning, masking, scope enforcement and Stop remain
   separate safeguards. Stop always detaches locally before network cleanup.
-  This replaces the original trusted-input/timestamp takeover design per Gilad's
-  September 19 instruction: Chrome's extra trusted events and ordinary human
+  This replaces the original trusted-input/timestamp takeover design as decided on
+  2026-09-19: Chrome's extra trusted events and ordinary human
   movement made automatic takeover too brittle (#28). Users must explicitly
   Pause before working privately in the shared tab; input no longer signals
   consent to interrupt automatically. No takeover listeners or synthetic future
@@ -524,8 +521,8 @@ decrypts everything before creating a new output directory. The CLI
 is available in the installed extension interaction summary page; CLI rendering itself remains unimplemented.
 
 Coding harnesses: Claude Code and Codex attach the MCP server or shell out to
-the CLI. BeanOS sessions get a skill that wraps the CLI; the existing
-`beanos-tab-share` skill is retired at cutover.
+the CLI. See the [agent skill](../skills/remote-tab/SKILL.md) and
+[copyable examples](../examples/) for both interfaces.
 
 ## 9. Ledger
 
@@ -712,48 +709,40 @@ tests remain regression coverage alongside these checks.
 
 ## 14. Deployment boundary
 
-This repository ships code, a Dockerfile, and a reference deploy doc. It
-never contains a specific deployment: no domains, project ids, service
-accounts, or secrets. BeanOS deploys its instance from the
-BeanOS monorepo's Terraform, the same way the paste-bin is deployed, using
-open creation with throttling. Keyed deployments keep platform keys in their
-own secret store.
+This repository ships product code, a Dockerfile, and a
+[self-hosting guide](self-hosting.md). Production domains, cloud projects,
+service accounts, and secrets belong to each deployment. The agent API guide
+separately documents the hosted service for users who choose it.
 
-## 15. Migration for BeanOS
+## 15. Migration
 
-1. Server live at its deployment-owned origin with open, throttled creation;
-   BeanOS sessions need no platform key.
-2. Extension 2.0 ships on the existing listing. The generic build accepts only
-   `rt1.` codes: the 1.1.2 short-key/pointer path requires deployment-owned
-   GCS/paste-bin origins, which are deliberately absent from generic host
-   permissions. The BeanOS distribution must carry the one-release compatibility
-   shim during M4, outside this repository.
-3. `beanos-tab-share` skill becomes a wrapper over `remote-tab`; docs updated;
-   old GCS pointer path removed from the extension in 2.1.
+The generic extension accepts only `rt1.` codes. Legacy short-key/pointer
+flows need extra deployment-owned origins and are outside this repository.
+Distributions must manage their own temporary compatibility adapters and
+remove them after cutover; generic host permissions stay limited to the
+configured server origin.
 
-## 16. Milestones
+## 16. Release verification
 
-1. **M1** this document + skeleton merged.
-2. **M2** protocol + server + client with the headless end-to-end test green.
-3. **M3** extension 2.0 driving a real tab against the server.
-4. **M4** BeanOS cutover (§15).
-5. **M5** open-source: license, security policy, public docs, store rename.
+Protocol, server, client, CLI, MCP, and extension implementations have automated
+coverage. Distribution acceptance still requires the
+[manual test plan](manual-test-plan.md); packaging is separate from publication.
+Maintainers own security review and release readiness.
 
-## 17. Decisions and remaining question
+## 17. Decisions
 
-1. ~~License.~~ **Decided: MIT** (Gilad, 2026-09-18). `LICENSE` is in the repo
+1. **Decided: MIT** (2026-09-18). `LICENSE` is in the repo
    from the first commit so nothing has to be relicensed at open-source time.
 2. **Decided: optional API keys with an external key-service contract**
-   (Gilad, 2026-09-18): open source API optional; BeanOS runs the key service
+   (2026-09-18): API keys are optional; server providers run key services
    and tiers outside this repo. §5.6 defines static/HTTP resolvers, per-subject
    or per-IP QPS, and best-effort usage sinks. The only new server runtime
    dependency is pinned `rate-limiter-flexible` with its memory backend;
    shared backends remain an option. No emails, billing, tier product logic,
-   or BeanOS deployment values enter this repo. Anonymous defaults to 10 QPS;
+   or deployment values enter this repo. Anonymous defaults to 10 QPS;
    setting 0 requires keys. The client and CLI/MCP support omitted platform keys.
-3. **Decided: memory default; optional Firestore + GCS adapter** (Gilad,
-   2026-09-18). Firestore owns session/message transactions and listeners; GCS
+3. **Decided: memory default; optional Firestore + GCS adapter** (2026-09-18). Firestore owns session/message transactions and listeners; GCS
    stores blobs only (§5.3). Self-hosters may add adapters. The state.json
    cursor transport is retired. Shared GCP active caps do not change per-instance
    request QPS. Child retention conservatively covers the maximum Extend window.
-4. **Open (Gilad):** store-facing extension name at open-source time.
+4. **Decided: Remote Tab** is the extension display name.
