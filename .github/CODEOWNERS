@@ -1,4 +1,3 @@
-# Maintainers: replace this placeholder with an existing organization team
-# that has write access before relying on required code-owner review.
-# No organization team was available when this file was prepared.
-# * @BeanOS-ai/maintainers
+# Code owners for remote-tab. Required code-owner review on main is satisfied by
+# any member of the maintainers team.
+*       @BeanOS-ai/maintainers
