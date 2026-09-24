@@ -644,6 +644,16 @@ there is no dual-read migration or shared state between the two adapters.
   with the key (§5.5). Compromise of a client
   distribution channel (Web Store, npm) is outside this model, as it is for
   any installed software.
+- **Known limitation: attachment binding.** Blob ciphertexts use the same
+  AAD as the message that references them (`session-id | role | prev_hash`);
+  the blob id is not part of it. Each reference instead carries its blob's
+  random 96-bit nonce inside the authenticated message, so a relay that
+  serves one attachment's ciphertext under another reference fails AES-GCM
+  authentication (covered by a protocol test), and it cannot move an
+  attachment across messages, roles or sessions. Binding the blob id and
+  reference index into the AAD as well is planned as defense in depth. It
+  changes the wire format, so it waits for a versioned protocol release with a
+  compatibility window (§12).
 - **Malicious page.** Snapshot text and eval output are data. The extension
   executes nothing from the page, and `browser_evaluate` runs in an isolated
   world so page script cannot redefine what the agent reads back. Fields the
@@ -669,6 +679,10 @@ there is no dual-read migration or shared state between the two adapters.
   and stop at handoff points. Not before the live path is solid.
 - **Enterprise.** Admin-pinned scope and mode, SSO-stamped consent, export to
   SIEM. Needs an identity layer the v1 deliberately does not have.
+- **Blob id in the attachment AAD.** Add the blob id and reference index to
+  each attachment's AAD (§11, known limitation). Ships with a protocol version
+  bump and a server window that accepts both formats while installed
+  extensions update.
 
 ## 13. Repository layout
 
