@@ -34,10 +34,10 @@ try {
     {},
     join(root, "npm/remote-tab"),
   );
-  const [{ filename, files }] = JSON.parse(packed) as {
-    filename: string;
-    files: { path: string }[];
-  }[];
+  // npm 10/11 print an array of packs; npm 12 prints an object keyed by package name.
+  type Pack = { filename: string; files: { path: string }[] };
+  const parsed = JSON.parse(packed) as Pack[] | Record<string, Pack>;
+  const [{ filename, files }] = Array.isArray(parsed) ? parsed : Object.values(parsed);
   const paths = files.map((file) => file.path).sort();
   const expected = ["LICENSE", "README.md", "SKILL.md", "dist/cli.js", "dist/mcp.js"];
   if (JSON.stringify(paths) !== JSON.stringify([...expected, "package.json"].sort()))
