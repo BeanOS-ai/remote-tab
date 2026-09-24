@@ -1,7 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { resolve } from "node:path";
 import { version } from "../../../npm/remote-tab/package.json" with { type: "json" };
 import { createApp } from "./app";
 import { ORIGIN_PLACEHOLDER, parsePublicOrigin } from "./bootstrap";
@@ -12,45 +10,28 @@ const app = createApp({ store: new MemoryStore(), anonymousQps: 10000 });
 const request = (path: string, method = "GET") =>
   app.fetch(new Request(`https://server.invalid${path}`, { method }));
 
-test("agent docs are generated markdown with the custody caveat and all APIs", async () => {
+test("docs are a short CLI quick start that links the repository", async () => {
   const res = await request("/docs");
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toStartWith("text/markdown");
   expect(res.headers.get("x-content-type-options")).toBe("nosniff");
   const text = await res.text();
-  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(44_000);
-  expect(text).toContain("trusts that server's operator with the complete shared session");
+  // Gilad, 2026-09-24: /docs was "too verbose"; the protocol reference lives in the repo.
+  expect(Buffer.byteLength(text)).toBeLessThanOrEqual(4_000);
   for (const phrase of [
-    "Create needs no Authorization header on an open deployment",
-    "rate_limited",
-    "REMOTE_TAB_ANONYMOUS_QPS",
-    "key_service_unavailable",
-    "Authorization: Bearer",
-    "HKDF",
-    "AES-256-GCM",
-    "handoff_done",
-    "private",
-    "key_hex",
-    "browser_click",
-    "/extend",
-    "/stop",
-    "/blobs",
-    "/redeem",
-    "/messages",
+    `npx -y remote-tab@${version} create`,
+    `npx -y remote-tab@${version} wait-ready`,
+    `npx -y remote-tab@${version} stop`,
+    `npx -y remote-tab@${version} skill`,
+    `"remote-tab@${version}","remote-tab-mcp"`,
+    "private channel",
+    "untrusted data",
+    "handoff",
+    "https://github.com/BeanOS-ai/remote-tab",
   ]) {
     expect(text).toContain(phrase);
   }
-});
-
-test("docs lead with the CLI-preferred npm quick start", async () => {
-  const text = await (await request("/docs")).text();
-  const quickStart = text.slice(0, text.indexOf("## Protocol reference"));
-  expect(quickStart).toContain("**The CLI is preferred.**");
-  expect(quickStart).toContain(`npx -y remote-tab@${version} create`);
-  expect(quickStart).toContain(`npx -y remote-tab@${version} skill`);
-  expect(quickStart).toContain(`"remote-tab@${version}","remote-tab-mcp"`);
-  expect(quickStart).toContain("https://github.com/BeanOS-ai/remote-tab");
-  expect(quickStart).not.toContain("client-code");
+  expect(text).not.toContain("client-code");
 });
 
 test("a configured public origin names the relay in the docs", async () => {

@@ -324,15 +324,13 @@ issuance, or tier-specific product logic belongs here.
 
 ### 5.7 Agent bootstrap (2026-09-18 addendum; npm package 2026-09-24)
 
-- `GET /docs` returns `text/markdown; charset=utf-8`. It opens with a quick
-  start for the `remote-tab` npm package (CLI preferred, then MCP, the agent
-  skill, and a link to the repository for more information), followed by a self-contained protocol reference: the
-  pasted code, all §5.3 requests and responses, crypto serialization and test
-  vectors, §6 tools, handoff, limits, and safe private delivery. It includes
-  the §5.5 trust caveat. The build generates it from selected sections of this
-  design, `docs/agent-api.md`, and the checked crypto vector in
-  `docs/crypto-vector.json`; the build rejects a document larger than 44,000
-  UTF-8 bytes. There is no second hand-maintained copy of the quick start.
+- `GET /docs` returns `text/markdown; charset=utf-8`: a short agent quick
+  start for the `remote-tab` npm CLI (create, private code delivery, the core
+  commands, the three safety rules, the `skill` and `--help` commands, and the
+  MCP configuration). It links the repository for the protocol, security model
+  and self-hosting documentation (2026-09-24: Gilad found the embedded protocol
+  reference too verbose). `scripts/generate-bootstrap.ts` owns the text; the
+  build rejects a document larger than 4,000 UTF-8 bytes.
 - The quick start pins `npx -y remote-tab@{version}`, where the version is the
   `npm/remote-tab/package.json` release embedded at build time.
 - `REMOTE_TAB_PUBLIC_ORIGIN` names the origin agents use; when it is set, the
