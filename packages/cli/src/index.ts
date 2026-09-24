@@ -12,6 +12,13 @@ import {
   RemoteTabError,
   createSession,
 } from "@remote-tab/client";
+import manifest from "../../../npm/remote-tab/package.json" with { type: "json" };
+import skill from "../../../skills/remote-tab/SKILL.md" with { type: "text" };
+
+/** The published `remote-tab` npm package version; the bundle embeds it at build time. */
+export const VERSION: string = manifest.version;
+/** The agent skill, embedded so `remote-tab skill` works from the npm package alone. */
+export const SKILL: string = skill;
 
 export class CliError extends Error {
   constructor(
@@ -43,6 +50,8 @@ export const COMMANDS = [
   "stop",
   "ledger export",
   "ledger render",
+  "skill",
+  "version",
 ] as const;
 
 const aliases: Record<string, string> = {
@@ -78,6 +87,8 @@ export function parseArgs(argv: string[]): Arguments {
   if (command === "help" && flags.size === 0 && positionals.length === 0)
     return { command, args: {} };
   if (!(COMMANDS as readonly string[]).includes(command)) invalid("Unknown command; use --help");
+  if ((command === "skill" || command === "version") && (flags.size || positionals.length))
+    invalid(`${command} takes no arguments`);
   command = aliases[command] ?? command;
   const browser = (BROWSER_TOOLS as readonly string[]).includes(command);
   const emptyArgs = command === "remote_tab_status" || command === "remote_tab_stop";
@@ -216,7 +227,11 @@ export async function execute(
         "ledger export --out NEW_DIRECTORY | ledger render --out FILE.gif|FILE.webm (M3 extension renderer)",
       handoff: 'handoff {"message":"Your turn"}; waits for human Done',
       status: "status [{}] | stop [{}]; JSON arguments are optional and must be empty",
+      skill:
+        "skill prints the agent skill (Markdown): consent, private delivery, and this CLI flow",
+      version: `remote-tab ${VERSION}`,
     };
+  if (args.command === "version") return { version: VERSION };
   if (args.command === "ledger render")
     throw new CliError(
       "unsupported",
@@ -281,7 +296,13 @@ export async function runCLI(
   env: Record<string, string | undefined> = process.env,
 ): Promise<number> {
   try {
-    const result = await execute(parseArgs(argv), env);
+    const args = parseArgs(argv);
+    if (args.command === "skill") {
+      // The skill is Markdown for the agent to read, not a JSON result.
+      process.stdout.write(SKILL.endsWith("\n") ? SKILL : `${SKILL}\n`);
+      return 0;
+    }
+    const result = await execute(args, env);
     if (result && typeof result === "object" && "ok" in result && result.ok === false) {
       console.error(JSON.stringify(result));
       return 1;

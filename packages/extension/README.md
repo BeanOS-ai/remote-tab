@@ -146,5 +146,5 @@ unchanged. A changing embedded-frame geometry regression reproduces this case;
 Live-site behavior still requires manual acceptance testing.
 
 Changing the display name does not change extension identity. Packaging and
-store publication are separate release steps. See [handoff evidence](../../docs/evidence/handoff/README.md)
-and [popup evidence](../../docs/evidence/popup/README.md).
+store publication are separate release steps. The browser CI workflow uploads
+handoff and popup screenshots as build artifacts.

@@ -104,6 +104,8 @@ describe("CLI parser", () => {
       ["ledger", "render", "--out", "movie.mp4"],
       ["status", "--out", "x"],
       ["unsupported_tool"],
+      ["skill", "--state", "x"],
+      ["version", "{}"],
     ])
       expect(() => parseArgs(args)).toThrow();
   });
@@ -123,6 +125,24 @@ describe("CLI parser", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+  test("skill prints the bundled agent skill; version reports the npm release", async () => {
+    const skill = Bun.spawn([process.execPath, main, "skill"], {
+      env: { ...process.env, REMOTE_TAB_SERVER_URL: "" },
+      stdout: "pipe",
+    });
+    const [markdown, exit] = await Promise.all([new Response(skill.stdout).text(), skill.exited]);
+    expect(exit).toBe(0);
+    expect(markdown).toBe(
+      await readFile(join(import.meta.dir, "../../../skills/remote-tab/SKILL.md"), "utf8"),
+    );
+    const { version } = JSON.parse(
+      await readFile(join(import.meta.dir, "../../../npm/remote-tab/package.json"), "utf8"),
+    );
+    expect((await cli(["version"])).json).toEqual({ version });
+    expect((await cli(["--help"])).json.commands).toEqual(
+      expect.arrayContaining(["skill", "version"]),
+    );
   });
 });
 

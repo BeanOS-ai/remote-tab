@@ -11,7 +11,7 @@ import {
   type WireMessage,
 } from "@remote-tab/protocol";
 import { b64url, chainHash } from "@remote-tab/protocol/src/crypto";
-import { bootstrapResponse } from "./bootstrap";
+import { bootstrapResponses } from "./bootstrap";
 import {
   type KeyResolver,
   KeyServiceUnavailable,
@@ -46,6 +46,8 @@ export interface AppOptions {
   now?: () => Date;
   /** Blob size cap; overridable in tests. */
   blobMaxBytes?: number;
+  /** Origin agents use for this relay, shown in /docs and /client-code; never derived from requests. */
+  publicOrigin?: string;
 }
 
 const BLOB_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
@@ -115,6 +117,7 @@ export function createApp(opts: AppOptions): {
   if (!Number.isSafeInteger(anonymousQps) || anonymousQps < 0)
     throw new Error("anonymousQps must be a nonnegative safe integer");
   const limits = { ...DEFAULT_THROTTLES, ...opts.limits };
+  const bootstrapResponse = bootstrapResponses(opts.publicOrigin);
   const qps = new QpsLimiter();
   const usage = opts.usageSink ?? new LogUsageSink({ now: () => now().getTime() });
   type Identity =

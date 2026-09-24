@@ -95,8 +95,8 @@ References: [Firestore transactions](https://docs.cloud.google.com/firestore/nat
 
 ## Dependency compatibility
 
-The workspace pins the Firestore client and Google authentication library. Two
-small Bun patches to transitive Gaxios declarations describe its `fetch` method
-as a callable Fetch API function, rather than requiring Bun's static
-`fetch.preconnect` helper. They change no runtime code. Full declaration and
-source checking remain enabled; reevaluate the patches when updating Gaxios.
+The workspace pins the Firestore client and Google authentication library.
+TypeScript runs with `skipLibCheck`, so declaration files inside dependencies
+are not type-checked. This avoids a mismatch between Gaxios's published `fetch`
+declaration and Bun's `fetch` type, which requires Bun's static
+`fetch.preconnect` helper. Repository sources remain fully type-checked.

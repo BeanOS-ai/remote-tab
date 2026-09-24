@@ -2,8 +2,8 @@
   "mcpServers": {
     "remote-tab": {
       "type": "stdio",
-      "command": "bun",
-      "args": ["/absolute/path/to/remote-tab/packages/mcp/src/main.ts"],
+      "command": "npx",
+      "args": ["-y", "-p", "remote-tab", "remote-tab-mcp"],
       "env": {
         "REMOTE_TAB_SERVER_URL": "${REMOTE_TAB_SERVER_URL}",
         "REMOTE_TAB_API_KEY": "${REMOTE_TAB_API_KEY:-}"

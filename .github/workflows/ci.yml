@@ -19,3 +19,8 @@ jobs:
         run: bun test packages
       - name: Headless end-to-end lifecycle
         run: bun test tests/e2e
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: npm package installs and runs on the minimum Node version
+        run: bun run build:npm && bun run test:npm

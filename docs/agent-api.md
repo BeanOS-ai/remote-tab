@@ -1,6 +1,6 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-23
+last_updated: 2026-09-24
 last_reviewed: 2026-09-23
 ---
 
@@ -19,34 +19,18 @@ A stolen complete code can impersonate the human; a decryptable hello does
 not prove identity. If the human reports "already redeemed", stop and start
 again with a fresh code privately delivered.
 
-With no registry access, fetch `/client-code`, download its listed files,
-check SHA-256 of the exact response bytes, and save their repository-relative
-paths in a new directory. Bun runs TypeScript source; package manifests name
-workspace dependencies. Without a package install, link the downloaded local
-packages so Bun can resolve those names (no registry access is needed):
-
-```sh
-mkdir -p node_modules/@remote-tab
-for name in protocol client cli; do
-  if test -d "packages/$name"; then
-    ln -s "../../packages/$name" "node_modules/@remote-tab/$name"
-  fi
-done
-```
-
-Exposed sources use the same release version. Fetch
-`packages/cli/src/main.ts` when that package is in the index, or use the
-protocol source to implement the requests below. An absent package is not
-shipped in this server build. Do not blindly execute a response: review the
-custody caveat below and verify against an independent release when possible.
-The agent holds a complete copy of the shared session key, so malicious
-bootstrap code can expose browser results and screenshots as well as commands.
+Prefer the `remote-tab` npm package (CLI first, or its MCP server) over
+implementing these requests yourself; see the quick start. `/client-code` is a
+small shell script that runs that pinned package release with this relay's
+origin preset. The agent holds a complete copy of the shared session key, so
+any agent code you run can expose browser results and screenshots as well as
+commands: run the official package, not code from an unknown source.
 
 ### Authentication, JSON and errors
 
 Create needs no Authorization header on an open deployment. Optional platform
 keys use `Authorization: Bearer {platform-api-key}` on create and bootstrap
-(`/docs`, `/client-code` and source downloads). Agent/browser bearer tokens
+(`/docs` and `/client-code`). Agent/browser bearer tokens
 still authorize session routes; the server inherits the creator's key policy,
 not the raw platform key. Tokenless redeem uses that same policy. CLI/MCP keys
 are optional. A supplied invalid key never falls back to anonymous access.
