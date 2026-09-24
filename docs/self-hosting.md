@@ -121,9 +121,8 @@ so the docs name your relay.
 There are no browser pages. Running code from a server means trusting its
 operator with the agent's session key; see design §5.5.
 
-The build compiles the docs from `docs/design.md`, `docs/agent-api.md` and
-`docs/crypto-vector.json`, and embeds the npm package version. After editing
-docs, regenerate with `bun run generate`. Run `bun run test` and
+`scripts/generate-bootstrap.ts` holds the `/docs` text and embeds the npm
+package version. After editing it, regenerate with `bun run generate`. Run `bun run test` and
 `bun run check` for tests and formatting; `bunx tsc -p tsconfig.json` checks
 types. CI builds before checking/tests, so source changes cannot leave the
 served assets stale in a release.

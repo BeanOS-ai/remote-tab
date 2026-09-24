@@ -195,7 +195,7 @@ bun run check
 bunx tsc -p tsconfig.json
 ```
 
-Builds regenerate embedded agent documentation and source assets. See the
+Builds regenerate the embedded `/docs` page. See the
 [development guide](docs/development.md) for headless lifecycle tests,
 Chromium verification, and the manual acceptance plan.
 
