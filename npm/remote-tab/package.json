@@ -1,6 +1,6 @@
 {
   "name": "remote-tab",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Let an AI agent use one tab in a person's own Chrome, end-to-end encrypted. CLI and MCP server for agents.",
   "license": "MIT",
   "type": "module",

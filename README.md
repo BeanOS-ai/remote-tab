@@ -153,8 +153,7 @@ payment approval, and other human-only steps to the human through a handoff.
 
 Sensitive-field masking is best effort, based on page markup; it is not a
 guarantee that every secret is hidden. Agent code holds the session key: run
-the official `remote-tab` npm package. The relay's `/client-code` script only
-runs a pinned release of it. Read the [design and threat model](docs/design.md) and
+the official `remote-tab` npm package. Read the [design and threat model](docs/design.md) and
 [responsible disclosure policy](SECURITY.md).
 
 ## Self-hosting

@@ -64,7 +64,7 @@ No email, billing, key issuance, or tier product rules are implemented here.
 | `REMOTE_TAB_STORE` | `memory`; optional `gcp` uses Firestore + GCS blobs |
 | `REMOTE_TAB_GCS_BUCKET` | Required for `gcp`; ciphertext blobs only |
 | `REMOTE_TAB_FIRESTORE_DATABASE` | `(default)`; Firestore database for `gcp` |
-| `REMOTE_TAB_PUBLIC_ORIGIN` | Unset; your relay's `https://` origin, used in `/docs` and `/client-code` |
+| `REMOTE_TAB_PUBLIC_ORIGIN` | Unset; your relay's `https://` origin, used in `/docs` |
 | `PORT` | `8080` |
 
 QPS values are nonnegative integers; keyed QPS 0 is unlimited. The pinned
@@ -115,9 +115,9 @@ emulator validation. Migration requires draining the old GCS cursor deployment;
 there is no dual-read compatibility or live migration. Self-hosters may supply
 other implementations of the exported `Store` interface.
 
-`GET /docs` serves generated agent quick-start markdown. `GET /client-code`
-serves a short shell script that runs the pinned `remote-tab` npm release.
-Set `REMOTE_TAB_PUBLIC_ORIGIN` to your HTTPS origin so both name your relay.
+`GET /docs` serves generated agent quick-start markdown built around the
+`remote-tab` npm package. Set `REMOTE_TAB_PUBLIC_ORIGIN` to your HTTPS origin
+so the docs name your relay.
 There are no browser pages. Running code from a server means trusting its
 operator with the agent's session key; see design §5.5.
 

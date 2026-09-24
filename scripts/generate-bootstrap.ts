@@ -22,8 +22,9 @@ extension. Use the official \`remote-tab\` npm package (Node.js 20 or newer).
 unless no package can run in your environment.
 
 Before you create a session, read the agent skill. It holds the consent and
-private-delivery rules: \`npx -y remote-tab@${version} skill\`, or
-https://github.com/BeanOS-ai/remote-tab/blob/main/skills/remote-tab/SKILL.md
+private-delivery rules: \`npx -y remote-tab@${version} skill\`. For more
+information (the skill, MCP setup, self-hosting, and the design), see the
+repository: https://github.com/BeanOS-ai/remote-tab
 
 ## CLI (preferred)
 
@@ -47,14 +48,6 @@ npx -y remote-tab@${version} stop --state "$STATE"
 \`npx -y remote-tab@${version} --help\` lists every command. Output is JSON on
 stdout. Errors are JSON on stderr with a nonzero exit code.
 
-The same CLI is available as a script with this relay's origin preset. It runs
-the pinned npm package above:
-
-\`\`\`sh
-curl -fsSL ${origin}/client-code -o remote-tab && chmod +x remote-tab
-./remote-tab create --state "$STATE" --ttl 1800
-\`\`\`
-
 ## MCP
 
 \`\`\`json
@@ -76,4 +69,4 @@ if (Buffer.byteLength(docs) > 44_000) throw new Error("agent docs exceed 44,000 
 const out = join(root, "packages/server/src/generated/bootstrap.json");
 await mkdir(dirname(out), { recursive: true });
 await writeFile(out, `${JSON.stringify({ docs, version })}\n`);
-console.log(`Agent docs ${Buffer.byteLength(docs)} bytes; client-code runs remote-tab@${version}`);
+console.log(`Agent docs ${Buffer.byteLength(docs)} bytes; quick start uses remote-tab@${version}`);

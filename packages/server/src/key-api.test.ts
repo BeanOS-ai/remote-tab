@@ -124,7 +124,7 @@ test("every keyed API request including redeem, long poll, docs, errors and stop
     [`/v1/sessions/${session.id}/redeem`, undefined, "POST", 200],
     [`/v1/sessions/${session.id}/messages?wait=0`, session.agent_token, "GET", 200],
     ["/docs", rawKey, "GET", 200],
-    ["/client-code", rawKey, "GET", 200],
+    ["/client-code", rawKey, "GET", 404],
     ["/unknown", rawKey, "GET", 404],
     [`/v1/sessions/${session.id}/stop`, session.agent_token, "POST", 200],
   ];
