@@ -88,7 +88,7 @@ async function handle(message: unknown) {
   if (message.action === "stop") {
     cancelStart();
     if (starting && tabId !== undefined) await chrome.debugger.detach({ tabId }).catch(() => {});
-    await active?.stop();
+    await active?.stop("human");
     return { ok: true };
   }
   if (["pause", "resume", "done", "extend"].includes(String(message.action))) {
@@ -179,7 +179,7 @@ async function handle(message: unknown) {
         if (active) active.state.notice = notice.message;
         if (notice.code === "scope_lost") {
           cancelStart();
-          void active?.stop();
+          void active?.stop("scope_lost");
         }
       },
     });
@@ -256,7 +256,7 @@ chrome.debugger.onEvent.addListener((target, method, params) => {
     if (active?.state.sharing)
       active.state.notice = "Sharing ended because this page could no longer be controlled safely";
     cancelStart();
-    return active?.stop();
+    return active?.stop("unsafe_page");
   };
   if (!target.sessionId) {
     // Clear attention before any document transition, including same-document navigation.
@@ -271,13 +271,13 @@ chrome.debugger.onEvent.addListener((target, method, params) => {
 chrome.debugger.onDetach.addListener((target) => {
   if (target.tabId === tabId) {
     cancelStart();
-    void active?.stop();
+    void active?.stop("debugger_detached");
   }
 });
 chrome.tabs.onRemoved.addListener((id) => {
   if (id === tabId) {
     cancelStart();
-    void active?.stop();
+    void active?.stop("tab_closed");
   }
 });
 

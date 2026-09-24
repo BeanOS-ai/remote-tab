@@ -152,7 +152,7 @@ async function fixture(mode: Hello["mode"] = "act") {
     },
     lostAcknowledgements: () => lostAcknowledgements,
     close: async () => {
-      await share.stop();
+      await share.stop("human");
       await share.settled();
     },
   };
@@ -329,7 +329,7 @@ test("human and agent stop each detach once and prevent subsequent commands", as
     const h = await fixture();
     try {
       await h.agent.waitReady();
-      if (who === "human") await Promise.all([h.share.stop(), h.share.stop()]);
+      if (who === "human") await Promise.all([h.share.stop("human"), h.share.stop("human")]);
       else await h.agent.stop();
       await until(() => h.detached() === 1);
       await h.share.settled();

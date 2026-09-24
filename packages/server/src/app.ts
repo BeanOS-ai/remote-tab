@@ -228,8 +228,11 @@ export function createApp(opts: AppOptions): {
     allowed: ReadonlyArray<Role>,
   ): Promise<{ session: SessionRecord; role: Role } | Response> {
     const auth = ctx.authenticated;
-    if (!auth || auth.session.id !== id || !auth.role || !allowed.includes(auth.role))
+    if (!auth || auth.session.id !== id || !auth.role)
       return fail(401, "unauthorized", "token not valid for this session");
+    // Authenticated for this session, but the route belongs to the other role.
+    if (!allowed.includes(auth.role))
+      return fail(403, "forbidden", `the ${auth.role} token cannot use this route`);
     // Key-service resolution may outlast the session TTL. Re-evaluate the
     // captured record at the authorization boundary after that await.
     return { session: effectiveState(auth.session), role: auth.role };

@@ -15,14 +15,16 @@ This document is a procedure, not an execution report: all human results start
   Branded Google Chrome 137+ ignores `--load-extension`; install manually with
   `chrome://extensions` → **Load unpacked**. Automated extension runs should use
   Chrome for Testing or Chromium.
-- Have an approved staging login with a disposable account and working MFA ready.
-  Confirm its sign-in flow before the run. A dummy OTP field is **not** evidence
-  of completing real MFA. Do not use a production account or real payment data.
+- No real login or MFA account is needed. The handoff check uses the fixture's
+  clean form (any page with a text box works). Do not use a production account
+  or real payment data anywhere in this run.
+- Chrome's own "is debugging this browser" bar is not part of this acceptance
+  run; its presence during sharing is Chrome behaviour, not remote-tab's.
 - Use one server origin consistently. The commands below use a local server;
   an operator-provided HTTPS server works too if its origin is compiled into the
   extension. Supply an API key privately through the environment only if that
   server requires it. Never paste keys, codes, connection-state files, passwords,
-  MFA codes, or raw diagnostic responses into the results table or an issue.
+  one-time codes, or raw diagnostic responses into the results table or an issue.
 - Start the server and browser fixture in separate terminals and leave them running:
 
   ```sh
@@ -73,7 +75,7 @@ Start: ______ UTC · End: ______ UTC · Tester: ______
 
 Commit: ______ · Chrome/OS: ______ · Extension version: ______
 
-Server build/store: ______ · Test-login system alias (no account details): ______
+Server build/store: ______
 
 Write **PASS**, **FAIL**, or **BLOCKED**, with a short observation. A blocked or
 unobserved requirement is not a pass. Stop and record a failure if a command
@@ -85,10 +87,10 @@ reaches an unshared tab, reveals a protected value, or continues after local Sto
 | 3–9 | All ordinary tools, tab binding, site scope | NOT RUN | |
 | 9–12 | Human pause, interaction summary, Stop, ZIP/GIF | NOT RUN | |
 | 12–15 | Read-only, Full, privacy masking | NOT RUN | |
-| 15–20 | Real test-login MFA handoff | NOT RUN | |
+| 15–20 | Human handoff with text entry | NOT RUN | |
 | 20–23 | Human Extend, agent denial, 60-second expiry | NOT RUN | |
 | 23–25 | ID-only redeem / hijack detection | NOT RUN | |
-| 25–28 | Debugger dismissal and unpacked update | NOT RUN | |
+| 25–28 | Shared-tab close and unpacked update | NOT RUN | |
 | 28–30 | Final results and cleanup | NOT RUN | |
 
 ## 0–3: Install, consent, and used-code refusal
@@ -106,14 +108,14 @@ reaches an unshared tab, reveals a protected value, or continues after local Sto
    expect the same inline invalid-code message as step 3.
 3. Paste `rt1.bad` and press **Read my tab**. Expect
    “Paste a valid rt1. code from your agent”; wait two seconds and confirm the
-   message remains. No debugger bar or sharing session should appear.
+   message remains. No sharing session should start.
 4. Run `new_share act`. Keep its code available privately for step 6. Select
    **Act — click, type, navigate**, leave **This site only** checked, paste the
    code, and click **Control my tab**. **Stop** must remain visible, including
    during startup. Do not touch the shared page while agent tools are running.
 5. Run `rt wait-ready --timeout-ms 15000`, then `rt status`. Expect authenticated
    consent with mode `act`, the fixture site, its title/URL, and the extension
-   version. Chrome's debugging bar is expected; the popup explains it.
+   version.
 6. In profile B, open the fixture and try the **same still-active code**.
    Expect “This code was already used — tell your agent”, with no lasting
    debugger attachment in B. Profile A must remain the sole controller.
@@ -225,16 +227,14 @@ checks that this navigation is permitted when the human authorizes it.
    the clean form and repeat evaluate: it must remain refused for this share.
    Stop and inspect its interaction summary for dummy-value leaks, including action labels.
 
-## 15–20: Real MFA handoff
+## 15–20: Human handoff with text entry
 
-1. Run `new_share mfa`. Open the approved staging login in profile A and share
-   with **Act** and the scope required by that login's redirects. Wait ready.
-   If the site is refused because protected-field inspection cannot run safely, record **BLOCKED** and the site's alias. Do not disable
-   the guard, reload away form state, or substitute a dummy OTP as a pass.
+1. Run `new_share handoff`. Open `http://127.0.0.1:8081/form` in profile A,
+   share it with **Act** and **This site only**, and wait ready.
 2. Run the following and leave it waiting:
 
    ```sh
-   rt handoff '{"message":"Please complete test sign-in and MFA, then click Done."}' --timeout-ms 240000
+   rt handoff '{"message":"Please type your name in the Name box, then click Done."}' --timeout-ms 240000
    ```
 
 3. Expect **Your turn**, the exact message, and **Done**. **Resume** must not
@@ -242,13 +242,11 @@ checks that this navigation is permitted when the human authorizes it.
    one snapshot with a short timeout; the shared client must refuse it as
    `handoff_pending` before sending it. A command already delivered at the
    boundary may instead return `paused`. Avoid further concurrent commands.
-4. The human enters the test password and current MFA response directly into
-   the website and reaches the authenticated landing page. Do not copy either
-   credential into a command, screenshot report, terminal, or chat.
+4. The human clicks the **Name** box and types a short value of their choice.
+   Typing during a handoff must not end the share or show "you took over".
 5. Click **Done**. The waiting handoff must complete, then a new snapshot must
-   show the authenticated landing page. Stop and verify the interaction summary includes
-   the handoff and completion. Record only success/failure, no credential or
-   account-identifying page contents. A rejected/missing MFA step is not a pass.
+   show the Name box holding the value the human typed. Stop and verify the
+   interaction summary includes the handoff and its completion.
 
 ## 20–23: Short TTL, human-only Extend, and expiry
 
@@ -295,13 +293,12 @@ redeem HTTP 200, then `hijack_suspected` after the hello grace period and a
 stopped session. No browser command should execute. This does **not** prove
 detection of full-code theft: a thief with the full code can authenticate.
 
-## 25–28: Debugger bar, loss of control, and unpacked update
+## 25–28: Loss of control and unpacked update
 
-1. Run `new_share detach 60`, share the clean form, and wait ready. Dismiss
-   Chrome's debugging bar using its own Cancel/close control. Expect sharing
-   to end locally, the popup to stop offering live control, and a subsequent
-   agent action to fail. Do not interpret a missing debugger bar as permission
-   to continue. Stop the agent session explicitly if its transport still exists.
+1. Run `new_share detach 60`, share the clean form, and wait ready. Close the
+   shared tab. Expect sharing to end locally, the popup to stop offering live
+   control, and a subsequent agent action to fail with `session_not_active`.
+   Stop the agent session explicitly if its transport still exists.
 2. Run `new_share update 60`, share, and wait ready. For a reproducible local
    unpacked update, increment only the generated manifest's patch version:
 
@@ -315,7 +312,7 @@ detection of full-code theft: a thief with the full code can authenticate.
    ```
 
    In `chrome://extensions`, click **Reload** for this unpacked extension.
-   Confirm the new displayed version, the old debugger attachment is gone,
+   Confirm the new displayed version, the old share no longer answers commands,
    and reopening the popup requires a fresh code/consent. The old share must
    not resume or replay commands. End its transport using `rt stop`.
 3. Create `new_share after-update 60`, consent again, and verify one snapshot
@@ -325,15 +322,14 @@ detection of full-code theft: a thief with the full code can authenticate.
 
 ## 28–30: Close the run
 
-- Fill every results row, including any skipped tool or blocked real-login step.
+- Fill every results row, including any skipped tool or blocked step.
   Record durations and sanitized error codes. Do not mark the whole run passed
   when any required observation is missing.
-- Keep only reviewed dummy-fixture exports as evidence. Do not attach the MFA
-  ledger, connection-state files, private codes, browser tokens, or raw console
+- Keep only reviewed dummy-fixture exports as evidence. Do not attach
+  handoff ledgers, connection-state files, private codes, browser tokens, or raw console
   logs. Privately inspect any suspected leak and report the affected surface,
   not the value.
-- Confirm every session is stopped or expired, sign out of the test account,
-  close the disposable profiles, and stop the fixture/server terminals. Delete
+- Confirm every session is stopped or expired, close the disposable profiles, and stop the fixture/server terminals. Delete
   private state and exports according to the test environment's cleanup policy.
 - If a step exceeded its budget, record **BLOCKED: time budget** and the last
   completed observation. Do not silently omit it or claim a 30-minute pass.

@@ -44,7 +44,8 @@ for keyed calls; anonymous access is unaffected. JSON POST bodies use
 `Content-Type: application/json`. Requests use HTTPS; timestamps are ISO UTC.
 
 Errors are JSON `{ "error": "{code}", "message": "{detail}" }`: 400 invalid
-input, 401 missing/wrong credentials, 404 unknown path/session/blob, 409
+input, 401 missing/wrong credentials, 403 `forbidden` (a valid session token of the
+other role, e.g. the agent token on browser-only `extend`), 404 unknown path/session/blob, 409
 `id_taken`, inactive session, already redeemed, TTL cap, or stale chain, 410 redeem
 window closed, 413 too large, 429 `rate_limited` with `Retry-After` seconds,
 503 key service unavailable. QPS windows reset after one second; active

@@ -1,6 +1,6 @@
 import { BrowserPeer, type ClientOptions, type Hello, RemoteTabError } from "@remote-tab/client";
 import { parseCode } from "@remote-tab/protocol";
-import { type ControlEvent, MAX_CONTROL_EVENTS } from "./control-events";
+import { type ControlEvent, MAX_CONTROL_EVENTS, type StopReason } from "./control-events";
 import { DriverError, type TabDriver } from "./driver";
 import { actionSummary } from "./summary";
 
@@ -19,6 +19,11 @@ export interface ShareState {
   notice?: string;
 }
 export type StopObserver = (share: SharedSession, settled: Promise<void>) => void;
+/** How long a share keeps retrying while the server answers 429, before it gives up. */
+export const THROTTLE_BUDGET_MS = 120_000;
+const BUSY_NOTICE = "The server is busy; retrying…";
+const throttled = (error: unknown) =>
+  error instanceof RemoteTabError && error.code === "rate_limited";
 /** Owns one consented tab. The peer/key lives only in memory; restart requires fresh consent. */
 export class SharedSession {
   state: ShareState;
@@ -91,7 +96,7 @@ export class SharedSession {
       share.loop = share.run();
       return share;
     } catch (error) {
-      await share.stop();
+      await share.stop("connection_lost");
       throw error;
     }
   }
@@ -101,7 +106,7 @@ export class SharedSession {
     if (!Number.isFinite(remaining)) throw new Error("Invalid expiry");
     this.expiryTimer = setTimeout(
       () => {
-        void this.stop();
+        void this.stop("expired");
       },
       Math.max(0, remaining),
     );
@@ -116,10 +121,12 @@ export class SharedSession {
         this.commandPoll = poll;
         let command: Awaited<ReturnType<BrowserPeer["nextCommand"]>>;
         try {
-          command = await this.peer.nextCommand({
-            signal: AbortSignal.any([this.abort.signal, poll.signal]),
-            timeoutMs: 30_000,
-          });
+          command = await this.withThrottleRetry(() =>
+            this.peer.nextCommand({
+              signal: AbortSignal.any([this.abort.signal, poll.signal]),
+              timeoutMs: 30_000,
+            }),
+          );
         } catch (error) {
           if (poll.signal.aborted && !this.abort.signal.aborted) continue;
           if (error instanceof RemoteTabError && error.code === "timeout") continue;
@@ -137,24 +144,29 @@ export class SharedSession {
           continue;
         }
         if (command.tool === "remote_tab_status") {
-          await this.peer.sendResult(command.id, {
-            mode: this.state.mode,
-            scope: this.state.scope,
-            expiresAt: this.state.expiresAt,
-            paused: this.state.paused,
-            last_seq: (await this.peer.status()).last_seq,
-          });
+          const lastSeq = (await this.withThrottleRetry(() => this.peer.status())).last_seq;
+          await this.withThrottleRetry(() =>
+            this.peer.sendResult(command.id, {
+              mode: this.state.mode,
+              scope: this.state.scope,
+              expiresAt: this.state.expiresAt,
+              paused: this.state.paused,
+              last_seq: lastSeq,
+            }),
+          );
           continue;
         }
         if (command.tool === "remote_tab_stop") {
-          await this.stop();
+          await this.stop("agent");
           break;
         }
         if (this.state.paused) {
-          await this.peer.sendError(
-            command.id,
-            "paused",
-            `${this.pauseNotice}. Click Resume to continue.`,
+          await this.withThrottleRetry(() =>
+            this.peer.sendError(
+              command.id,
+              "paused",
+              `${this.pauseNotice}. Click Resume to continue.`,
+            ),
           );
           continue;
         }
@@ -178,14 +190,16 @@ export class SharedSession {
               : "The tab command failed";
           this.state.notice = message;
           this.log(message);
-          await this.peer.sendError(command.id, code, message);
+          await this.withThrottleRetry(() => this.peer.sendError(command.id, code, message));
           continue;
         } finally {
           this.actionEpoch = undefined;
         }
         if (this.abort.signal.aborted) break;
         if (this.state.paused || actionEpoch !== this.pauseEpoch) {
-          await this.peer.sendError(command.id, "paused", this.pauseNotice);
+          await this.withThrottleRetry(() =>
+            this.peer.sendError(command.id, "paused", this.pauseNotice),
+          );
           continue;
         }
         this.log(actionSummary(command.tool));
@@ -202,20 +216,51 @@ export class SharedSession {
                 attachment: blobs.push({ bytes: serialized, mimeType: "application/json" }) - 1,
               }
             : output.result;
-        await this.peer.sendResult(command.id, result, {
-          blobs,
-          ...(output.screenshot
-            ? { screenshot: { bytes: new Uint8Array(output.screenshot), mimeType: "image/png" } }
-            : {}),
-        });
+        await this.withThrottleRetry(() =>
+          this.peer.sendResult(command.id, result, {
+            blobs,
+            ...(output.screenshot
+              ? { screenshot: { bytes: new Uint8Array(output.screenshot), mimeType: "image/png" } }
+              : {}),
+          }),
+        );
       }
     } catch (error) {
       if (!this.abort.signal.aborted) {
-        this.state.notice =
-          error instanceof RemoteTabError && error.code === "session_not_active"
-            ? "Sharing ended or expired"
-            : "Connection ended. Start a new share to continue.";
-        await this.stop();
+        const ended = error instanceof RemoteTabError && error.code === "session_not_active";
+        this.state.notice = ended
+          ? "Sharing ended or expired"
+          : "Connection ended. Start a new share to continue.";
+        await this.stop(ended ? "remote_ended" : "connection_lost");
+      }
+    }
+  }
+  /**
+   * A 429 means the server did not apply the request (appends retry their own
+   * committed echo reads), so retrying is safe. A throttled share keeps its
+   * consent instead of ending; it gives up only after THROTTLE_BUDGET_MS.
+   */
+  private async withThrottleRetry<T>(operation: () => Promise<T>): Promise<T> {
+    const giveUpAt = Date.now() + THROTTLE_BUDGET_MS;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const value = await operation();
+        if (this.state.notice === BUSY_NOTICE) this.state.notice = undefined;
+        return value;
+      } catch (error) {
+        const delay = Math.min(10_000, 1000 * 2 ** attempt);
+        if (!throttled(error) || this.abort.signal.aborted || Date.now() + delay > giveUpAt)
+          throw error;
+        this.state.notice = BUSY_NOTICE;
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          const timer = setTimeout(done, delay);
+          this.abort.signal.addEventListener("abort", done, { once: true });
+        });
+        if (this.abort.signal.aborted) throw error;
       }
     }
   }
@@ -224,7 +269,10 @@ export class SharedSession {
     if (this.state.actions.length > 50) this.state.actions.shift();
   }
   private recordControl(action: "pause" | "resume") {
-    this.controlEvents.push({ action, timestamp: new Date().toISOString() });
+    this.pushControl({ action, timestamp: new Date().toISOString() });
+  }
+  private pushControl(event: ControlEvent) {
+    this.controlEvents.push(event);
     if (this.controlEvents.length > MAX_CONTROL_EVENTS) this.controlEvents.shift();
   }
   private get pauseNotice(): string {
@@ -294,8 +342,10 @@ export class SharedSession {
     this.log("Extended sharing by 30 minutes");
     return status;
   }
-  stop(): Promise<void> {
+  /** Ends the share once; the first caller's reason is what the history records. */
+  stop(reason: StopReason): Promise<void> {
     if (this.stopping) return this.stopping;
+    this.pushControl({ action: "stop", reason, timestamp: new Date().toISOString() });
     this.state.sharing = false;
     this.state.handoff = undefined;
     this.onHandoff?.(undefined, this.state.expiresAt ?? "");
