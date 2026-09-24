@@ -43,7 +43,7 @@ function snapshot(fields: Field[] = []) {
   return { documents: [document], strings };
 }
 const password = { attrs: { type: "password" }, value: "sword-fish" };
-function fixture(fields: Field[] = [password]) {
+function fixture(fields: Field[] = [password], screenshotTimeoutMs?: number) {
   const state = {
     snapshot: snapshot(fields),
     viewport: { pageX: 0, pageY: 0, clientWidth: 800, clientHeight: 600 },
@@ -97,6 +97,7 @@ function fixture(fields: Field[] = [password]) {
     url: "https://example.com",
     title: "Page",
     privacy,
+    screenshotTimeoutMs,
   });
   return { state, calls, masks, privacy, driver };
 }
@@ -482,6 +483,22 @@ describe("privacy guard", () => {
       if (method === "Runtime.evaluate") return { result: { value: "late-secret" } };
       if (method === "Page.captureScreenshot")
         f.state.snapshot = snapshot([{ ...password, value: "late-secret", hidden: true }]);
+      return undefined;
+    };
+    await expect(
+      f.driver.execute("browser_evaluate", { function: "() => 'late-secret'" }),
+    ).rejects.toMatchObject({ code: "privacy_denied" });
+  });
+  test("protected content that appears while a capture times out still withholds the result", async () => {
+    // A background tab Chrome will not draw: the capture never finishes, so the
+    // guard's post-capture scan never runs. The driver must scan before returning.
+    const f = fixture([], 20);
+    f.state.hook = async (method) => {
+      if (method === "Runtime.evaluate") return { result: { value: "late-secret" } };
+      if (method === "Page.captureScreenshot") {
+        f.state.snapshot = snapshot([{ ...password, value: "late-secret", hidden: true }]);
+        return new Promise<never>(() => {});
+      }
       return undefined;
     };
     await expect(

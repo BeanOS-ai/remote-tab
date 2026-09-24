@@ -389,7 +389,7 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.2.1); the display name is **Remote Tab** and the ZIP basename is
+(2.2.2); the display name is **Remote Tab** and the ZIP basename is
 `remote-tab-{version}.zip`. This rename does not update the public listing or
 the separate legacy Bean Tab Share tool.
 Packaging does not upload or publish the extension.
@@ -412,7 +412,10 @@ Behaviour:
 - Reads and screenshots use `chrome.debugger` (CDP) on the shared tab;
   Chrome's "is debugging this browser" bar is expected and the popup says so.
 - Every acting command captures one screenshot after it completes. Read
-  commands do not.
+  commands do not. Chrome may not draw a shared tab that is not in front, so
+  each capture is bounded (15 s): `browser_take_screenshot` then fails with
+  `screenshot_unavailable`, and an action returns its result without a
+  screenshot and tells the human in the popup.
 - **Origin scope** compares eTLD+1 using the bundled Mozilla Public Suffix List
   (including private suffixes; its data license and source accompany the snapshot).
   IP addresses and local hosts are compared exactly. CDP Fetch interception

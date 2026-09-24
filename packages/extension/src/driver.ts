@@ -23,7 +23,12 @@ export interface DriverOptions {
   sanitizeResult?: (value: unknown) => unknown | Promise<unknown>;
   beforeScreenshot?: () => Promise<void>;
   afterScreenshot?: () => Promise<void>;
+  /** Chrome may not render a background tab, so a capture can wait indefinitely. */
+  screenshotTimeoutMs?: number;
 }
+export const SCREENSHOT_TIMEOUT_MS = 15_000;
+export const SCREENSHOT_UNAVAILABLE =
+  "Chrome did not draw the shared tab in time, usually because another tab is in front. Ask the person to switch back to the shared tab (Remote Tab popup → Go to shared tab), then try again.";
 export interface DriverResult {
   result: unknown;
   screenshot?: Uint8Array;
@@ -563,11 +568,21 @@ export class TabDriver {
     await this.options.beforeScreenshot?.();
     try {
       const capture = async (region?: ScreenshotClip) => {
-        const result = await this.send("Page.captureScreenshot", {
-          format: "png",
-          captureBeyondViewport: false,
-          ...(region ? { clip: region } : {}),
-        });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        // A late capture after the timeout is discarded; it never reaches a result.
+        const result = await Promise.race([
+          this.send("Page.captureScreenshot", {
+            format: "png",
+            captureBeyondViewport: false,
+            ...(region ? { clip: region } : {}),
+          }),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new DriverError("screenshot_unavailable", SCREENSHOT_UNAVAILABLE)),
+              this.options.screenshotTimeoutMs ?? SCREENSHOT_TIMEOUT_MS,
+            );
+          }),
+        ]).finally(() => clearTimeout(timer));
         if (typeof result.data !== "string")
           throw new DriverError("driver_error", "Screenshot returned no data");
         const bytes = Uint8Array.from(atob(result.data), (c) => c.charCodeAt(0));
@@ -812,11 +827,30 @@ export class TabDriver {
       this.checkPrivateTool(tool);
       result = renderSnapshot ? renderSnapshot() : this.sanitizeOutput(tool, result);
       result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
-      const screenshot = isActing(tool) ? await this.screenshot() : undefined;
+      // The action already ran. A tab Chrome will not draw costs only the picture,
+      // not the result; browser_take_screenshot still reports screenshot_unavailable.
+      let screenshotSkipped = false;
+      const screenshot = isActing(tool)
+        ? await this.screenshot().catch((error) => {
+            if (error instanceof DriverError && error.code === "screenshot_unavailable") {
+              screenshotSkipped = true;
+              this.options.onNotice?.({
+                code: error.code,
+                message:
+                  "Your agent's last action ran, but Chrome could not capture the shared tab while another tab is in front.",
+              });
+              return undefined;
+            }
+            throw error;
+          })
+        : undefined;
+      // A timed-out capture skipped the privacy guard's post-capture scan; the
+      // page may have gained protected fields while it waited. Scan again first.
+      if (screenshotSkipped) await this.scanPrivacy();
       this.checkPrivateTool(tool);
       // Screenshot scans can discover newly filled fields. Scrub once more before
       // constructing any transport payload, with all discovered values available.
-      if (screenshot) result = this.sanitizeOutput(tool, result);
+      if (screenshot || screenshotSkipped) result = this.sanitizeOutput(tool, result);
       const bytes = encoder.encode(JSON.stringify(result));
       const output: DriverResult =
         bytes.length > MAX_LOG
