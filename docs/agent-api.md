@@ -20,9 +20,7 @@ not prove identity. If the human reports "already redeemed", stop and start
 again with a fresh code privately delivered.
 
 Prefer the `remote-tab` npm package (CLI first, or its MCP server) over
-implementing these requests yourself; see the quick start. `/client-code` is a
-small shell script that runs that pinned package release with this relay's
-origin preset. The agent holds a complete copy of the shared session key, so
+implementing these requests yourself; see the quick start. The agent holds a complete copy of the shared session key, so
 any agent code you run can expose browser results and screenshots as well as
 commands: run the official package, not code from an unknown source.
 
@@ -30,7 +28,7 @@ commands: run the official package, not code from an unknown source.
 
 Create needs no Authorization header on an open deployment. Optional platform
 keys use `Authorization: Bearer {platform-api-key}` on create and bootstrap
-(`/docs` and `/client-code`). Agent/browser bearer tokens
+(`/docs`). Agent/browser bearer tokens
 still authorize session routes; the server inherits the creator's key policy,
 not the raw platform key. Tokenless redeem uses that same policy. CLI/MCP keys
 are optional. A supplied invalid key never falls back to anonymous access.

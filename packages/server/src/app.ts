@@ -46,7 +46,7 @@ export interface AppOptions {
   now?: () => Date;
   /** Blob size cap; overridable in tests. */
   blobMaxBytes?: number;
-  /** Origin agents use for this relay, shown in /docs and /client-code; never derived from requests. */
+  /** Origin agents use for this relay, shown in /docs; never derived from requests. */
   publicOrigin?: string;
 }
 

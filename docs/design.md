@@ -131,8 +131,8 @@ domain) instead. It is still just a dead drop: it assigns sequence numbers,
 checks tokens, and stores blobs. With independently trusted client code, end-to-end encryption means the
 server, its operator, and the store see ciphertext only. For that promise to survive a
 compromised server, human-side code must come from the installed extension.
-Agents may deliberately trust server-supplied bootstrap source (§5.5–5.7);
-the server is an API, not a web application.
+Agent code comes from the `remote-tab` npm package, not the server (§5.5,
+§5.7); the server is an API, not a web application.
 
 ### 5.2 Crypto (deliberately boring)
 
@@ -163,7 +163,7 @@ optional platform API key for create, `agent_token` or `browser_token` afterward
 The server uses §5.6: anonymous creation is allowed unless
 `REMOTE_TAB_ANONYMOUS_QPS=0`; a supplied platform key must resolve successfully
 and never falls back to anonymous access. Both modes retain the backstops in §10.
-The additional agent bootstrap routes are specified in §5.7; the server
+The agent bootstrap page (`/docs`) is specified in §5.7; the server
 serves no pages (§5.5).
 
 | Method + path | Who | Purpose |
@@ -222,19 +222,16 @@ scripts on the page. There is no landing page, code link, interaction summary vi
 browser-executed JavaScript on this server. The extension's Web Store
 channel remains the human's client-code trust root.
 
-Agent code ships as the `remote-tab` npm package (CLI and MCP server). The
-`/client-code` script below is a convenience wrapper that runs a pinned
-release of that package with the relay's origin preset; the server serves no
-agent source. **An agent that runs code fetched from the server
+Agent code ships as the `remote-tab` npm package (CLI and MCP server); the
+server serves no agent code (2026-09-24: `/client-code` removed). **An agent
+that runs code fetched from the server
 trusts that server's operator with the complete shared session key.** The agent's and
 human's copies are identical, not cryptographic "halves": compromised agent
-code can expose commands, browser results, and screenshots. An agent should
-run the pinned package from the registry directly, or read the short script
-and confirm that it only runs that release, before running it.
+code can expose commands, browser results, and screenshots. Agents run the
+package from the registry.
 
-The API and the two agent bootstrap surfaces below are the entire public
-surface. No HTML and no JavaScript executed by a browser; the script is a
-plain download for agents. Everything else returns 404. Code handoff stays
+The API and the `/docs` bootstrap page below are the entire public surface.
+No HTML and no JavaScript executed by a browser. Everything else returns 404. Code handoff stays
 private; ledger viewing and any future livestream remain installed clients.
 
 ### 5.6 Key service contract
@@ -328,29 +325,26 @@ issuance, or tier-specific product logic belongs here.
 ### 5.7 Agent bootstrap (2026-09-18 addendum; npm package 2026-09-24)
 
 - `GET /docs` returns `text/markdown; charset=utf-8`. It opens with a quick
-  start for the `remote-tab` npm package (CLI preferred, then MCP, and a link
-  to the agent skill), followed by a self-contained protocol reference: the
+  start for the `remote-tab` npm package (CLI preferred, then MCP, the agent
+  skill, and a link to the repository for more information), followed by a self-contained protocol reference: the
   pasted code, all §5.3 requests and responses, crypto serialization and test
   vectors, §6 tools, handoff, limits, and safe private delivery. It includes
   the §5.5 trust caveat. The build generates it from selected sections of this
   design, `docs/agent-api.md`, and the checked crypto vector in
   `docs/crypto-vector.json`; the build rejects a document larger than 44,000
   UTF-8 bytes. There is no second hand-maintained copy of the quick start.
-- `GET /client-code` returns a POSIX `sh` script as `text/plain` with
-  `Content-Disposition: attachment; filename="remote-tab"` and
-  `X-Content-Type-Options: nosniff`. It runs
-  `npx -y remote-tab@{version} "$@"`, where the version is the
+- The quick start pins `npx -y remote-tab@{version}`, where the version is the
   `npm/remote-tab/package.json` release embedded at build time.
-- `REMOTE_TAB_PUBLIC_ORIGIN` names the origin agents use. When it is set, the
-  docs use it in their examples and the script defaults `REMOTE_TAB_SERVER_URL`
-  to it. It is configuration, never derived from request headers. It must be a
-  plain `http(s)` origin, which also keeps it inert inside the script. When it
-  is unset, the docs show a placeholder origin and the script leaves
-  `REMOTE_TAB_SERVER_URL` to the agent.
+- `REMOTE_TAB_PUBLIC_ORIGIN` names the origin agents use; when it is set, the
+  docs use it in their examples. It is configuration, never derived from
+  request headers, and must be a plain `http(s)` origin. When it is unset, the
+  docs show a placeholder origin.
+- `/client-code` (a 2026-09-18 source index, then briefly a script running the
+  npm package) is removed; it returns 404 like any other path.
 - After authentication and request limiting, other paths and non-GET methods
   return 404. Nothing is read from the filesystem at request time.
 - Publish the npm release before deploying a server built with its version:
-  the script pins that exact version.
+  the docs pin that exact version.
 
 ## 6. Protocol vocabulary
 

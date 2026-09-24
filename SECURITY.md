@@ -1,6 +1,6 @@
 ---
 created: 2026-09-23
-last_updated: 2026-09-23
+last_updated: 2026-09-24
 last_reviewed: 2026-09-23
 ---
 
@@ -11,11 +11,8 @@ last_reviewed: 2026-09-23
 Please do not disclose vulnerabilities, pairing codes, API keys, browser
 content, or session ledgers in public issues or pull requests.
 
-Contact the maintainers through your existing private project contact. If
-GitHub's **Report a vulnerability** option is available on this repository's
-[Security page](https://github.com/BeanOS-ai/remote-tab/security), use it to
-start a private report. A dedicated public reporting contact has not yet been
-established; maintainers must confirm that route before public launch.
+Email **[security@beanos.ai](mailto:security@beanos.ai)** to report a
+vulnerability privately.
 
 Include the affected version or commit, a minimal reproduction using synthetic
 data, the expected and observed behavior, and the potential impact. Do not send

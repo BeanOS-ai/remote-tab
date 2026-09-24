@@ -39,7 +39,7 @@ Set `REMOTE_TAB_SERVER_URL` to the relay origin the human's extension uses (the
 hosted relay is `https://tab.beanos.ai`). `REMOTE_TAB_API_KEY` is optional;
 provide it through the environment only when the deployment needs it. For a
 version pinned to the relay, use `npx -y remote-tab@VERSION` as shown on its
-`/docs` page, or its `/client-code` script, which runs the same package.
+`/docs` page.
 
 Create a fresh private state directory for each session and keep the same
 `STATE` across calls:
