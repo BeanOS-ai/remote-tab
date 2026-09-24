@@ -829,9 +829,11 @@ export class TabDriver {
       result = this.options.sanitizeResult ? await this.options.sanitizeResult(result) : result;
       // The action already ran. A tab Chrome will not draw costs only the picture,
       // not the result; browser_take_screenshot still reports screenshot_unavailable.
+      let screenshotSkipped = false;
       const screenshot = isActing(tool)
         ? await this.screenshot().catch((error) => {
             if (error instanceof DriverError && error.code === "screenshot_unavailable") {
+              screenshotSkipped = true;
               this.options.onNotice?.({
                 code: error.code,
                 message:
@@ -842,10 +844,13 @@ export class TabDriver {
             throw error;
           })
         : undefined;
+      // A timed-out capture skipped the privacy guard's post-capture scan; the
+      // page may have gained protected fields while it waited. Scan again first.
+      if (screenshotSkipped) await this.scanPrivacy();
       this.checkPrivateTool(tool);
       // Screenshot scans can discover newly filled fields. Scrub once more before
       // constructing any transport payload, with all discovered values available.
-      if (screenshot) result = this.sanitizeOutput(tool, result);
+      if (screenshot || screenshotSkipped) result = this.sanitizeOutput(tool, result);
       const bytes = encoder.encode(JSON.stringify(result));
       const output: DriverResult =
         bytes.length > MAX_LOG
