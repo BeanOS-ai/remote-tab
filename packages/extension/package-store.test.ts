@@ -108,7 +108,7 @@ test("store ZIP has the exact runtime allowlist, valid CRCs, published icons, pe
   }
   const manifest = JSON.parse(bytes(members, "manifest.json").toString());
   expect(manifest.name).toBe("Remote Tab");
-  expect(manifest.version).toBe("2.2.0");
+  expect(manifest.version).toBe("2.2.1");
   expect(manifest.version).toBe(
     (await Bun.file(join(import.meta.dir, "package.json")).json()).version,
   );

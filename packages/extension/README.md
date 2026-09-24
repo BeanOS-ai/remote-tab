@@ -73,11 +73,11 @@ supports up to 300 screenshots; exceeding a limit shows an error rather than
 silently omitting history. The viewer accepts up to 5,000 entries / 96 MiB, with
 32 MiB of metadata; pending transfers expire after five minutes.
 
-Package version 2.2.0 for distribution with Bun and Python 3:
+Package version 2.2.1 for distribution with Bun and Python 3:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
-  packages/extension/package-store.sh /tmp/remote-tab-2.2.0.zip
+  packages/extension/package-store.sh /tmp/remote-tab-2.2.1.zip
 ```
 
 Release packaging requires an explicit HTTPS origin and rejects the development

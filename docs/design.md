@@ -389,7 +389,7 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.2.0); the display name is **Remote Tab** and the ZIP basename is
+(2.2.1); the display name is **Remote Tab** and the ZIP basename is
 `remote-tab-{version}.zip`. This rename does not update the public listing or
 the separate legacy Bean Tab Share tool.
 Packaging does not upload or publish the extension.
