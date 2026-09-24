@@ -7,8 +7,10 @@ import {
   deriveSessionKey,
   messageAad,
   open,
+  openBytes,
   randomSecret,
   seal,
+  sealBytes,
   unb64url,
   verifyChain,
 } from "./crypto";
@@ -98,4 +100,20 @@ describe("session crypto", () => {
     const forged = [msgs[0], { ...msgs[1], ciphertext: "evil" }, msgs[2]];
     expect((await verifyChain(sid, forged)).ok).toBe(false);
   });
+});
+
+test("a relay cannot swap attachment ciphertexts sealed at the same chain position", async () => {
+  // Attachments of one message share the AAD (session, role, prev_hash), so their
+  // binding to a reference is the per-blob random nonce inside the authenticated
+  // message. Serving another attachment's ciphertext under a reference must fail.
+  const id = "7087407e1b71d177d2899a4cb6c7fb0b";
+  const key = await deriveSessionKey(randomSecret(), id);
+  const aad = messageAad(id, "browser", "ab".repeat(32));
+  const screenshot = await sealBytes(key, new TextEncoder().encode("screenshot"), aad);
+  const json = await sealBytes(key, new TextEncoder().encode("json attachment"), aad);
+  expect(
+    new TextDecoder().decode(await openBytes(key, screenshot.nonce, screenshot.ciphertext, aad)),
+  ).toBe("screenshot");
+  await expect(openBytes(key, screenshot.nonce, json.ciphertext, aad)).rejects.toThrow();
+  await expect(openBytes(key, json.nonce, screenshot.ciphertext, aad)).rejects.toThrow();
 });
