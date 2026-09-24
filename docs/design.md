@@ -1,6 +1,6 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-23
+last_updated: 2026-09-24
 last_reviewed: 2026-09-23
 ---
 
@@ -222,22 +222,19 @@ scripts on the page. There is no landing page, code link, interaction summary vi
 browser-executed JavaScript on this server. The extension's Web Store
 channel remains the human's client-code trust root.
 
-Serving client source to the **agent** is a deliberate convenience for an
-agent with no GitHub or npm access. **An agent that runs code fetched from
-the server trusts that server's operator with the complete shared session
-key.** The agent's and human's copies are identical, not cryptographic
-"halves": compromised agent code can expose commands, browser results, and
-screenshots. This gives up the blind-server guarantee against a malicious
-operator for the whole session; the human's installed-code boundary does not
-change.
-An agent that can reach an independent package registry should prefer that
-trusted distribution, or compare the served version and SHA-256 file hashes
-against the published package. Hashes from the same server check integrity,
-not authenticity; an operator can replace both a file and its hash.
+Agent code ships as the `remote-tab` npm package (CLI and MCP server). The
+`/client-code` script below is a convenience wrapper that runs a pinned
+release of that package with the relay's origin preset; the server serves no
+agent source. **An agent that runs code fetched from the server
+trusts that server's operator with the complete shared session key.** The agent's and
+human's copies are identical, not cryptographic "halves": compromised agent
+code can expose commands, browser results, and screenshots. An agent should
+run the pinned package from the registry directly, or read the short script
+and confirm that it only runs that release, before running it.
 
 The API and the two agent bootstrap surfaces below are the entire public
-surface. No HTML and no JavaScript executed by a browser; source files are
-plain downloads for agents. Everything else returns 404. Code handoff stays
+surface. No HTML and no JavaScript executed by a browser; the script is a
+plain download for agents. Everything else returns 404. Code handoff stays
 private; ledger viewing and any future livestream remain installed clients.
 
 ### 5.6 Key service contract
@@ -328,34 +325,32 @@ issuance, or tier-specific product logic belongs here.
   A clearly delimited hosted-service section may document that deployment's
   URLs and key onboarding; self-hosters should skip it and issue their own keys.
 
-### 5.7 Agent bootstrap without GitHub or npm (2026-09-18 addendum)
+### 5.7 Agent bootstrap (2026-09-18 addendum; npm package 2026-09-24)
 
-- `GET /docs` returns `text/markdown; charset=utf-8`: a self-contained agent
-  quick-start covering the pasted code, all §5.3 requests and responses,
-  crypto serialization and test vectors, §6 tools, handoff, limits, and safe
-  private delivery. It includes the §5.5 trust caveat. The build generates
-  it from selected sections of this design, `docs/agent-api.md`, and the
-  checked crypto vector in `docs/crypto-vector.json`; the build rejects a
-  document larger than 44,000 UTF-8 bytes. There is no second hand-maintained
-  copy of the quick-start.
-- `GET /client-code` returns `{version, files:[{path, sha256, bytes}]}`.
-  Paths are repository-relative. `GET /client-code/{path}` returns those
-  exact UTF-8 bytes as `text/plain` or `application/typescript`, with
-  `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
-  Version is the package release version, shared across the exposed packages;
-  SHA-256 hashes cover the bytes, not a reserialized representation.
-- Build-time generation embeds package manifests and non-test TypeScript
-  sources from `packages/protocol`, `packages/client`, and `packages/cli`
-  into the server bundle. Only packages present in the build are listed
-  (protocol, client, and CLI are implemented in M2). No server source, dependencies,
-  node_modules, filesystem lookup at request time, or arbitrary paths.
-  All entrypoints build the assets before bundling; source changes are
-  included on the next build. After authentication and request limiting,
-  unknown paths and non-GET methods return 404.
-- Agents download the index, validate version and hashes against independent
-  published packages when possible, save each allowlisted file under its
-  path, and run the source with Bun. Until npm publication the hashes only
-  detect download corruption: they are not an independent trust anchor.
+- `GET /docs` returns `text/markdown; charset=utf-8`. It opens with a quick
+  start for the `remote-tab` npm package (CLI preferred, then MCP, and a link
+  to the agent skill), followed by a self-contained protocol reference: the
+  pasted code, all §5.3 requests and responses, crypto serialization and test
+  vectors, §6 tools, handoff, limits, and safe private delivery. It includes
+  the §5.5 trust caveat. The build generates it from selected sections of this
+  design, `docs/agent-api.md`, and the checked crypto vector in
+  `docs/crypto-vector.json`; the build rejects a document larger than 44,000
+  UTF-8 bytes. There is no second hand-maintained copy of the quick start.
+- `GET /client-code` returns a POSIX `sh` script as `text/plain` with
+  `Content-Disposition: attachment; filename="remote-tab"` and
+  `X-Content-Type-Options: nosniff`. It runs
+  `npx -y remote-tab@{version} "$@"`, where the version is the
+  `npm/remote-tab/package.json` release embedded at build time.
+- `REMOTE_TAB_PUBLIC_ORIGIN` names the origin agents use. When it is set, the
+  docs use it in their examples and the script defaults `REMOTE_TAB_SERVER_URL`
+  to it. It is configuration, never derived from request headers. It must be a
+  plain `http(s)` origin, which also keeps it inert inside the script. When it
+  is unset, the docs show a placeholder origin and the script leaves
+  `REMOTE_TAB_SERVER_URL` to the agent.
+- After authentication and request limiting, other paths and non-GET methods
+  return 404. Nothing is read from the filesystem at request time.
+- Publish the npm release before deploying a server built with its version:
+  the script pins that exact version.
 
 ## 6. Protocol vocabulary
 
@@ -480,8 +475,11 @@ Behaviour:
 `remote_tab_create` (prints the code for the human) and
 `remote_tab_wait_ready`. `packages/cli` is `remote-tab` with one subcommand
 per tool plus `create`, `wait-ready`, `status`, `stop`, and
-`ledger export|render`. Both are thin; if a behaviour exists in only one, it
-is a bug.
+`ledger export|render`, `skill` (prints the agent skill) and `version`. Both
+are thin; if a behaviour exists in only one, it is a bug. Both ship as the
+`remote-tab` npm package (`npm/remote-tab`): Node bundles built by
+`scripts/build-npm.ts`, bins `remote-tab` and `remote-tab-mcp`. The CLI is the
+preferred agent interface.
 
 The shared browser transport is `BrowserPeer`; installed extension code owns
 consent, mode/scope enforcement, redaction, and actual tab actions. Both peers
@@ -686,6 +684,7 @@ packages/mcp        stdio MCP server over client
 packages/cli        `remote-tab` over client
 packages/server     dead-drop server (Bun), Dockerfile, reference deploy doc
 packages/extension  Chrome extension (MV3), store packaging script
+npm/remote-tab      the published `remote-tab` npm package (CLI + MCP bundles)
 tests/e2e           fake tab over BrowserPeer, CLI and MCP lifecycle tests
 tests/browser       real Chromium, installed MV3 extension, offline fixtures
 docs/               this design, protocol reference, threat model
@@ -725,7 +724,9 @@ configured server origin.
 ## 16. Release verification
 
 Protocol, server, client, CLI, MCP, and extension implementations have automated
-coverage. Distribution acceptance still requires the
+coverage. `scripts/npm-smoke.ts` installs the packed npm tarball with npm and
+runs both bins under Node against a local relay. The `publish-npm` workflow
+publishes the release; publish it before deploying a server that pins it (§5.7). Distribution acceptance still requires the
 [manual test plan](manual-test-plan.md); packaging is separate from publication.
 Maintainers own security review and release readiness.
 

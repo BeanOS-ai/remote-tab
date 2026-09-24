@@ -1,3 +1,4 @@
+import { parsePublicOrigin } from "./bootstrap";
 import { HttpKeyResolver, StaticKeyResolver } from "./key-resolver";
 import { parseThrottleEnv, parseTrustedProxyHops } from "./limits";
 import { HttpUsageSink, LogUsageSink } from "./usage";
@@ -44,5 +45,6 @@ export function serverPolicy(env: Record<string, string | undefined>) {
     limits,
     trustProxyHops,
     trustProxy: env.REMOTE_TAB_TRUST_PROXY === "1",
+    publicOrigin: parsePublicOrigin(env.REMOTE_TAB_PUBLIC_ORIGIN),
   };
 }

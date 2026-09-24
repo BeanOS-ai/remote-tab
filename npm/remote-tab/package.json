@@ -1,0 +1,25 @@
+{
+  "name": "remote-tab",
+  "version": "0.1.0",
+  "description": "Let an AI agent use one tab in a person's own Chrome, end-to-end encrypted. CLI and MCP server for agents.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://beanos.ai/remote-tab/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BeanOS-ai/remote-tab.git"
+  },
+  "keywords": ["agent", "browser", "chrome", "mcp", "cli", "remote", "tab"],
+  "bin": {
+    "remote-tab": "dist/cli.js",
+    "remote-tab-mcp": "dist/mcp.js"
+  },
+  "files": ["dist", "SKILL.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.6.5"
+  }
+}

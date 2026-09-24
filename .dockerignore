@@ -3,8 +3,6 @@
 !package.json
 !bun.lock
 !LICENSE
-!patches/
-!patches/*.patch
 !packages/
 !packages/*/
 !packages/*/package.json
@@ -16,6 +14,9 @@
 !docs/design.md
 !docs/agent-api.md
 !docs/crypto-vector.json
+!npm/
+!npm/remote-tab/
+!npm/remote-tab/package.json
 !tests/
 !tests/*/
 !tests/*/package.json

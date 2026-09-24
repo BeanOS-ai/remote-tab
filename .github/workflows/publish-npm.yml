@@ -1,0 +1,41 @@
+name: publish-npm
+# Publishes npm/remote-tab to the public npm registry. Run it from main after the
+# version bump merges; deploy a relay pinned to that version only afterwards.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: publish-npm
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - run: bun install --frozen-lockfile
+      - run: bun run generate
+      - run: bunx tsc -p tsconfig.json
+      - run: bun test packages
+      - run: bun run build:npm && bun run test:npm
+      - name: Refuse a version that is already published
+        run: |
+          version="$(node -p 'require("./npm/remote-tab/package.json").version')"
+          if npm view "remote-tab@$version" version 2>/dev/null | grep -q .; then
+            echo "remote-tab@$version is already on npm; bump npm/remote-tab/package.json" >&2
+            exit 1
+          fi
+      - name: Publish
+        working-directory: npm/remote-tab
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

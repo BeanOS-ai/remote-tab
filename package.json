@@ -9,7 +9,9 @@
     "check": "bun run generate && bunx biome check .",
     "generate": "bun scripts/generate-bootstrap.ts",
     "build": "bun run generate && bun build packages/server/src/main.ts --target=bun --external @remote-tab/store-gcp --outdir=dist && bun packages/extension/build.ts",
-    "test:browser": "bun tests/browser/run.mjs"
+    "test:browser": "bun tests/browser/run.mjs",
+    "build:npm": "bun run generate && bun scripts/build-npm.ts",
+    "test:npm": "bun scripts/npm-smoke.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
@@ -18,10 +20,6 @@
   },
   "optionalDependencies": {
     "@remote-tab/store-gcp": "workspace:*"
-  },
-  "patchedDependencies": {
-    "gaxios@7.3.1": "patches/gaxios@7.3.1.patch",
-    "gaxios@7.1.3": "patches/gaxios@7.1.3.patch"
   },
   "packageManager": "bun@1.4.2",
   "engines": {

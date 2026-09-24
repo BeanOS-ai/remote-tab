@@ -1,7 +1,7 @@
-# Merge this table into ~/.codex/config.toml; replace the checkout path.
+# Merge this table into ~/.codex/config.toml.
 [mcp_servers.remote-tab]
-command = "bun"
-args = ["/absolute/path/to/remote-tab/packages/mcp/src/main.ts"]
+command = "npx"
+args = ["-y", "-p", "remote-tab", "remote-tab-mcp"]
 env_vars = ["REMOTE_TAB_SERVER_URL", "REMOTE_TAB_API_KEY"]
 # Allow the client's 120-second readiness/handoff wait to finish.
 tool_timeout_sec = 150

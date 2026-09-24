@@ -1,6 +1,6 @@
 ---
 created: 2026-09-23
-last_updated: 2026-09-23
+last_updated: 2026-09-24
 last_reviewed: 2026-09-23
 ---
 
@@ -64,6 +64,7 @@ No email, billing, key issuance, or tier product rules are implemented here.
 | `REMOTE_TAB_STORE` | `memory`; optional `gcp` uses Firestore + GCS blobs |
 | `REMOTE_TAB_GCS_BUCKET` | Required for `gcp`; ciphertext blobs only |
 | `REMOTE_TAB_FIRESTORE_DATABASE` | `(default)`; Firestore database for `gcp` |
+| `REMOTE_TAB_PUBLIC_ORIGIN` | Unset; your relay's `https://` origin, used in `/docs` and `/client-code` |
 | `PORT` | `8080` |
 
 QPS values are nonnegative integers; keyed QPS 0 is unlimited. The pinned
@@ -115,15 +116,14 @@ there is no dual-read compatibility or live migration. Self-hosters may supply
 other implementations of the exported `Store` interface.
 
 `GET /docs` serves generated agent quick-start markdown. `GET /client-code`
-lists versioned, SHA-256-indexed protocol/client/CLI source files present in
-the build; fetch a file at `/client-code/{path}`. There are no browser pages.
-Running source from that server means trusting its operator with the agent's
-session key. Prefer independently distributed packages when possible; see
-design §5.5 for the explicit custody tradeoff.
+serves a short shell script that runs the pinned `remote-tab` npm release.
+Set `REMOTE_TAB_PUBLIC_ORIGIN` to your HTTPS origin so both name your relay.
+There are no browser pages. Running code from a server means trusting its
+operator with the agent's session key; see design §5.5.
 
 The build compiles the docs from `docs/design.md`, `docs/agent-api.md` and
-`docs/crypto-vector.json`, and embeds source bytes. After editing docs or
-source, regenerate with `bun run generate`. Run `bun run test` and
+`docs/crypto-vector.json`, and embeds the npm package version. After editing
+docs, regenerate with `bun run generate`. Run `bun run test` and
 `bun run check` for tests and formatting; `bunx tsc -p tsconfig.json` checks
 types. CI builds before checking/tests, so source changes cannot leave the
 served assets stale in a release.

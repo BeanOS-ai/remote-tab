@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
-import { bootstrapResponse } from "./bootstrap";
+import { bootstrapResponses } from "./bootstrap";
 
 test("generated /docs survives HTML tag sanitization without losing protocol text", async () => {
-  const res = bootstrapResponse(new Request("https://server.invalid/docs"));
+  const res = bootstrapResponses()(new Request("https://server.invalid/docs"));
   if (!res) throw new Error("Missing generated /docs response");
   expect(res.status).toBe(200);
   const text = await res.text();

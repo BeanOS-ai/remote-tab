@@ -5,8 +5,11 @@ description: Inspect or interact with a browser tab that a human explicitly shar
 
 # Remote Tab
 
-Use the configured MCP tools, or the CLI from a trusted source checkout. The
-human installs the extension and chooses the tab, access mode, and scope. A
+Use the official `remote-tab` npm package (Node.js 20 or newer). **Prefer the
+CLI** (`npx -y remote-tab`); use its MCP server when your host already has it
+configured. Do not hand-roll the protocol. The relay's `/docs` page (for
+example <https://tab.beanos.ai/docs>) is the full agent guide. The human
+installs the extension and chooses the tab, access mode, and scope. A
 session grants access only to that shared tab within their consent.
 
 ## Consent and private delivery
@@ -30,6 +33,56 @@ session grants access only to that shared tab within their consent.
 - Stop the session when the task finishes, the human withdraws consent, or
   continuing is unsafe. Do not leave an idle session open.
 
+## CLI flow (preferred)
+
+Set `REMOTE_TAB_SERVER_URL` to the relay origin the human's extension uses (the
+hosted relay is `https://tab.beanos.ai`). `REMOTE_TAB_API_KEY` is optional;
+provide it through the environment only when the deployment needs it. For a
+version pinned to the relay, use `npx -y remote-tab@VERSION` as shown on its
+`/docs` page, or its `/client-code` script, which runs the same package.
+
+Create a fresh private state directory for each session and keep the same
+`STATE` across calls:
+
+```sh
+STATE="$(mktemp -d)/session.json"
+npx -y remote-tab create --state "$STATE" --ttl 1800
+```
+
+The create result contains the secret code: handle that output privately.
+After private delivery and the human's sharing step:
+
+```sh
+npx -y remote-tab wait-ready --state "$STATE" --timeout-ms 120000
+npx -y remote-tab browser_snapshot --state "$STATE"
+```
+
+Act only with refs from the latest snapshot, for example
+`npx -y remote-tab browser_click --state "$STATE" --args '{"ref":"e1"}'`.
+When a handoff is needed:
+
+```sh
+npx -y remote-tab handoff --state "$STATE" --args '{"message":"Please complete sign-in yourself, then press Done."}' --timeout-ms 120000
+```
+
+Inspect state as needed and always stop when done:
+
+```sh
+npx -y remote-tab status --state "$STATE"
+npx -y remote-tab stop --state "$STATE"
+```
+
+Browser commands have the same names and JSON arguments as MCP tools; pass
+arguments with `--args`. CLI success is JSON on stdout; errors are JSON on stderr
+with a nonzero exit code. State includes the decryption secret and bearer token:
+keep the directory mode `0700` and state file mode `0600`, outside version control.
+Create refuses to overwrite state. Delete it after stopping when no longer needed.
+
+Use `npx -y remote-tab --help` for the command list; `npx -y remote-tab skill`
+prints this skill. Export a ledger only if the task calls for retaining it:
+`ledger export --out NEW_DIRECTORY` with the same `--state` writes decrypted,
+sensitive data. CLI `ledger render` currently returns `unsupported`.
+
 ## MCP flow
 
 Use the tool names below; the host may display an additional server prefix.
@@ -52,55 +105,7 @@ Use the tool names below; the host may display an additional server prefix.
 6. Use `remote_tab_status {}` to inspect state; finish with `remote_tab_stop {}`.
 
 The MCP server keeps one session in memory per connection. Stop it before
-creating another or restarting the MCP process. See the source checkout's
-`examples/` directory for Claude Code and Codex stdio configuration; the relay
-URL itself is not an MCP endpoint.
-
-## CLI flow
-
-From the source checkout, use the Bun version required by `package.json` and
-install dependencies with `bun install --frozen-lockfile`. Packages are not
-published; do not assume `npx remote-tab` exists. Set `REMOTE_TAB_SERVER_URL` to
-your operator's relay origin. `REMOTE_TAB_API_KEY` is optional; provide it through
-the environment only when needed by the deployment.
-
-Create a fresh private state directory for each session. These commands run
-from the checkout root; retain the same `rt_state_dir` across calls:
-
-```sh
-rt_state_dir=$(mktemp -d)
-bun packages/cli/src/main.ts create --state "$rt_state_dir/session.json" --ttl 1800
-```
-
-The create result contains the secret code: handle that output privately.
-After private delivery and the human's sharing step:
-
-```sh
-bun packages/cli/src/main.ts wait-ready --state "$rt_state_dir/session.json" --timeout-ms 120000
-bun packages/cli/src/main.ts browser_snapshot --state "$rt_state_dir/session.json"
-```
-
-When a handoff is needed:
-
-```sh
-bun packages/cli/src/main.ts handoff --state "$rt_state_dir/session.json" --args '{"message":"Please complete sign-in yourself, then press Done."}' --timeout-ms 120000
-```
-
-Inspect state as needed and always stop when done:
-
-```sh
-bun packages/cli/src/main.ts status --state "$rt_state_dir/session.json"
-bun packages/cli/src/main.ts stop --state "$rt_state_dir/session.json"
-```
-
-Browser commands have the same names and JSON arguments as MCP tools; pass
-arguments with `--args`. CLI success is JSON on stdout; errors are JSON on stderr
-with a nonzero exit code. State includes the decryption secret and bearer token:
-keep the directory mode `0700` and state file mode `0600`, outside version control.
-Create refuses to overwrite state. Delete it after stopping when no longer needed.
-
-Use `bun packages/cli/src/main.ts --help` for the command list. Export a ledger
-only if the task calls for retaining it: `ledger export --out NEW_DIRECTORY`
-with the same `--state` writes decrypted, sensitive data. CLI `ledger render`
-currently returns `unsupported`. For protocol details, read `docs/agent-api.md`
-in the source checkout.
+creating another or restarting the MCP process. Configure it as a stdio server:
+command `npx`, args `["-y", "-p", "remote-tab", "remote-tab-mcp"]`, with
+`REMOTE_TAB_SERVER_URL` in its environment. The relay URL itself is not an MCP
+endpoint.

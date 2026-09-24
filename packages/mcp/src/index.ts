@@ -13,6 +13,7 @@ import {
   createSession,
 } from "@remote-tab/client";
 import { z } from "zod";
+import { version as VERSION } from "../../../npm/remote-tab/package.json" with { type: "json" };
 
 export interface McpOptions {
   serverUrl: string;
@@ -118,7 +119,7 @@ async function guarded(fn: () => Promise<CallToolResult>): Promise<CallToolResul
 
 /** One private, in-memory agent session per MCP connection. No credentials are exported. */
 export function createMcpServer(options: McpOptions): McpServer {
-  const server = new McpServer({ name: "remote-tab", version: "0.0.0" });
+  const server = new McpServer({ name: "remote-tab", version: VERSION });
   let current: AgentSession | undefined;
   let creating = false;
   const session = () => {
