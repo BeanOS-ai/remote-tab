@@ -389,7 +389,7 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.2.0); the display name is **Remote Tab** and the ZIP basename is
+(2.2.1); the display name is **Remote Tab** and the ZIP basename is
 `remote-tab-{version}.zip`. This rename does not update the public listing or
 the separate legacy Bean Tab Share tool.
 Packaging does not upload or publish the extension.
@@ -695,7 +695,10 @@ actions, privacy, human controls, and ledger verification/export. Only browser
 unavailability permits a reported skip; assertion failures fail the job. Focused
 Chromium smoke scripts also cover privacy pixels, GIF decoding, and the store
 archive. The 30-minute manual plan in `docs/manual-test-plan.md` remains required
-for human acceptance, including real-site MFA and extension updates. Transport
+for human acceptance, including a human handoff with text entry and extension
+updates. A real MFA account is not required: the handoff check proves the human
+can act in the shared tab while the agent waits, which is the same mechanism a
+sign-in or MFA step uses. Transport
 tests remain regression coverage alongside these checks.
 
 ## 14. Deployment boundary

@@ -87,7 +87,7 @@ test("stopped extension ledger loads authenticated command/result PNGs and remai
     expect(result.attachments[0].bytes).toEqual(PNG);
     expect(actions).toBe(1);
     expect(captures).toBe(1);
-    const stopped = share.stop();
+    const stopped = share.stop("human");
     jobId = jobs.create(share.peer, stopped);
     let releases = 0;
     const ledger = await loadLedger(
@@ -157,7 +157,7 @@ test("stopped extension ledger loads authenticated command/result PNGs and remai
     expect(JSON.stringify(exported)).not.toContain(created.session.exportState().agentToken);
   } finally {
     if (jobId) jobs.release(jobId);
-    await share.stop();
+    await share.stop("human");
     await share.settled();
   }
 });

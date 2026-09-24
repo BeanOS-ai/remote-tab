@@ -2,7 +2,7 @@ import type { LedgerEntry } from "@remote-tab/client";
 import { UUID_V4_RE } from "@remote-tab/protocol";
 import { makeLedgerZip, screenshots } from "./archive";
 import { record } from "./chrome";
-import { CONTROL_EVENTS_NOTE, type ExtensionLedger } from "./control-events";
+import { CONTROL_EVENTS_NOTE, type ExtensionLedger, STOP_REASONS } from "./control-events";
 import { GifEncoder, quantize } from "./gif";
 import { loadLedger } from "./ledger-data";
 import { actionSummary } from "./summary";
@@ -179,12 +179,19 @@ function showLedger(history: ExtensionLedger) {
   if (history.controlEvents?.length) {
     const controls = document.createElement("section");
     controls.id = "local-human-controls";
-    controls.append(textNode("h2", "Local human controls"), textNode("p", CONTROL_EVENTS_NOTE));
+    controls.append(textNode("h2", "Local controls"), textNode("p", CONTROL_EVENTS_NOTE));
     for (const event of history.controlEvents) {
       const article = document.createElement("article");
       article.className = "entry";
       article.append(
-        textNode("h3", event.action === "pause" ? "Human paused sharing" : "Human resumed sharing"),
+        textNode(
+          "h3",
+          event.action === "stop"
+            ? `Sharing stopped: ${STOP_REASONS[event.reason]}`
+            : event.action === "pause"
+              ? "Human paused sharing"
+              : "Human resumed sharing",
+        ),
         textNode("p", event.timestamp, "meta"),
       );
       controls.append(article);

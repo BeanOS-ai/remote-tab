@@ -644,3 +644,45 @@ test("browser refuses a queued command when stop occurs between status and messa
   stopOnRead = true;
   await expect(browser.nextCommand()).rejects.toMatchObject({ code: "session_not_active" });
 });
+
+test("a throttled read after a committed append is retried, so the result is sent exactly once", async () => {
+  const h = setup();
+  const opts = { ...quick, fetch: h.fetch };
+  const { code, session } = await createSession({ serverUrl, apiKey, ...opts });
+  let watch = false;
+  let armed = false;
+  let throttled = 0;
+  const browserFetch: Fetch = async (req) => {
+    const path = new URL(req.url).pathname;
+    if (armed && req.method === "GET" && !path.includes("/blobs")) {
+      armed = false;
+      throttled++;
+      // Retry-After longer than the request budget: request() surfaces rate_limited.
+      return Response.json(
+        { error: "rate_limited", message: "rate limit exceeded" },
+        { status: 429, headers: { "retry-after": "60" } },
+      );
+    }
+    const response = await h.fetch(req);
+    if (watch && req.method === "POST" && path.endsWith("/messages") && response.ok) armed = true;
+    return response;
+  };
+  const browser = await BrowserPeer.redeem({
+    serverUrl,
+    code,
+    hello,
+    ...opts,
+    fetch: browserFetch,
+    sleep: async () => {},
+  });
+  await session.waitReady();
+  const pending = session.send("browser_snapshot");
+  const command = await browser.nextCommand();
+  watch = true;
+  await browser.sendResult(command.id, { text: "ok" });
+  watch = false;
+  expect(throttled).toBe(1);
+  expect(await pending).toMatchObject({ id: command.id, ok: true, result: { text: "ok" } });
+  const kinds = (await session.ledger()).entries.map((entry) => entry.envelope.kind);
+  expect(kinds).toEqual(["hello", "command", "result"]);
+});

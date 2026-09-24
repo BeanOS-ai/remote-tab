@@ -44,6 +44,7 @@ async function fixture(
   let screenshots = 0;
   let stopRequests = 0;
   let detached = 0;
+  let throttleNext = 0;
   const driver = new TabDriver(async (method, params = {}) => {
     calls.push({ method, params });
     if (
@@ -86,6 +87,14 @@ async function fixture(
   }, hello);
   await driver.initialize();
   const browserFetch: Fetch = async (request) => {
+    // A 429 whose Retry-After cannot fit the request budget surfaces as rate_limited.
+    if (throttleNext > 0 && !new URL(request.url).pathname.endsWith("/stop")) {
+      throttleNext--;
+      return Response.json(
+        { error: "rate_limited", message: "rate limit exceeded" },
+        { status: 429, headers: { "retry-after": "60" } },
+      );
+    }
     if (request.method === "POST" && new URL(request.url).pathname.endsWith("/stop")) {
       stopRequests++;
       await barriers.stop?.promise;
@@ -117,11 +126,15 @@ async function fixture(
     value: () => value,
     screenshots: () => screenshots,
     stopRequests: () => stopRequests,
+    throttle: (count: number) => {
+      throttleNext = count;
+    },
+    throttled: () => throttleNext,
     detached: () => detached,
     close: async () => {
       barriers.screenshot?.release();
       barriers.stop?.release();
-      await share.stop();
+      await share.stop("human");
       await share.settled();
     },
   };
@@ -215,6 +228,8 @@ test("agent stop remains terminal while the human has paused sharing", async () 
     expect(h.share.state.sharing).toBe(false);
     expect(h.calls).toHaveLength(before);
     expect((await h.agent.status()).state).toBe("stopped");
+    // The agent's API stop reaches the browser as an inactive session.
+    expect(h.share.controlEvents.at(-1)).toMatchObject({ action: "stop", reason: "remote_ended" });
   } finally {
     await h.close();
   }
@@ -232,8 +247,8 @@ test("only the browser can extend once, with updated visible expiry and the serv
         headers: { authorization: `Bearer ${state.agentToken}` },
       }),
     );
-    expect(rejected.status).toBe(401);
-    expect(await rejected.json()).toMatchObject({ error: "unauthorized" });
+    expect(rejected.status).toBe(403);
+    expect(await rejected.json()).toMatchObject({ error: "forbidden" });
     const command = await h.agent.send("remote_tab_extend");
     expect(command.ok).toBe(false);
     expect(h.share.state.expiresAt).toBe(initial);
@@ -256,7 +271,7 @@ test("stop detaches immediately while the server stop response is blocked, inclu
     h.share.pause();
     h.barriers.stop = gate();
     let stopFinished = false;
-    const stopped = h.share.stop().then(() => {
+    const stopped = h.share.stop("human").then(() => {
       stopFinished = true;
     });
     await until(() => h.stopRequests() === 1);
@@ -274,7 +289,7 @@ test("stop detaches immediately while the server stop response is blocked, inclu
     await expect(h.agent.send("browser_snapshot")).rejects.toMatchObject({
       code: "session_not_active",
     });
-    await h.share.stop();
+    await h.share.stop("human");
     expect(h.detached()).toBe(1);
   } finally {
     await h.close();
@@ -391,3 +406,26 @@ test("Done does not resume commands until asynchronous handoff UI cleanup finish
     await h.close();
   }
 });
+
+test("a throttled server does not end the share; it retries, then records why a share stopped", async () => {
+  const h = await fixture();
+  try {
+    // Rate-limit the browser's next two requests (its command poll) with a Retry-After
+    // too long for one request, as when agent and browser share an IP bucket.
+    h.throttle(2);
+    await until(() => h.share.state.notice === "The server is busy; retrying…");
+    expect(h.share.state.sharing).toBe(true);
+    const result = await h.agent.send("browser_snapshot", {}, { timeoutMs: 10_000 });
+    expect(result.ok).toBe(true);
+    expect(h.throttled()).toBe(0);
+    expect(h.share.state.sharing).toBe(true);
+    expect(h.share.state.notice).toBeUndefined();
+    await h.share.stop("human");
+    await h.share.stop("tab_closed");
+    expect(h.share.controlEvents.filter((event) => event.action === "stop")).toEqual([
+      { action: "stop", reason: "human", timestamp: expect.any(String) },
+    ]);
+  } finally {
+    await h.close();
+  }
+}, 15_000);

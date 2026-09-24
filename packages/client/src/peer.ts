@@ -481,7 +481,7 @@ export class Peer {
           )
             throw new RemoteTabError("chain_invalid", "Invalid append acknowledgement");
           // Read the committed echo before trusting it or allowing later actions.
-          await this.refreshUnlocked(0, this.checkWait(deadline, options.signal), options.signal);
+          await this.readEcho(deadline, options.signal);
           const echo = this.entries[result.seq - 1];
           if (echo?.message.hash !== result.hash)
             throw new RemoteTabError(
@@ -500,6 +500,22 @@ export class Peer {
         }
       }
     });
+  }
+  /**
+   * The append is already committed here, so a throttled echo read is retried
+   * instead of surfaced. Callers can then treat `rate_limited` from an append as
+   * "nothing was appended" and safely send again.
+   */
+  private async readEcho(deadline: number, signal?: AbortSignal): Promise<void> {
+    while (true) {
+      try {
+        await this.refreshUnlocked(0, this.checkWait(deadline, signal), signal);
+        return;
+      } catch (error) {
+        if (!(error instanceof RemoteTabError) || error.code !== "rate_limited") throw error;
+        await this.options.sleep(Math.min(1000, this.checkWait(deadline, signal)));
+      }
+    }
   }
   protected requireActive(status: SessionStatus): void {
     if (status.state !== "active")

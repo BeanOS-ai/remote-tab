@@ -26,9 +26,6 @@ may do. You watch the work in your own browser and can pause or stop it at any
 moment. Commands and results travel end-to-end encrypted through a blind
 dead-drop server.
 
-**Status:** Working implementation with automated tests; see the
-[manual acceptance plan](docs/manual-test-plan.md) before distributing a build.
-
 ## Features
 
 - **One-tab scope.** Control stays bound to the tab you shared, with an optional site restriction.
@@ -196,8 +193,8 @@ bunx tsc -p tsconfig.json
 ```
 
 Builds regenerate the embedded `/docs` page. See the
-[development guide](docs/development.md) for headless lifecycle tests,
-Chromium verification, and the manual acceptance plan.
+[development guide](docs/development.md) for headless lifecycle tests and
+Chromium verification.
 
 ## Contributing
 

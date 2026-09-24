@@ -194,6 +194,24 @@ test("Pause without a later command survives transfer, isolated from later Resum
   expect(Object.isFrozen(restored.controlEvents?.[0])).toBe(true);
 });
 
+test("a stop reason from the fixed set survives transfer", async () => {
+  const ledger = await fixture();
+  const stop = {
+    action: "stop" as const,
+    reason: "tab_closed" as const,
+    timestamp: "2026-09-19T12:03:00.000Z",
+  };
+  const jobs = new LedgerJobs();
+  const id = jobs.create(
+    { sessionId: ledger.sessionId, ledger: async () => ledger },
+    Promise.resolve(),
+    [stop],
+  );
+  ids.push([jobs, id]);
+  const restored = await loadLedger(id, transport(jobs), { pollMs: 0 });
+  expect(restored.controlEvents).toEqual([stop]);
+});
+
 test("local human controls reject invalid actions, timestamps and unbounded metadata", async () => {
   const ledger = await fixture();
   const peer = { sessionId: ledger.sessionId, ledger: async () => ledger };
@@ -202,6 +220,10 @@ test("local human controls reject invalid actions, timestamps and unbounded meta
   for (const invalidControls of [
     null,
     [{ ...pause, action: "automatic_takeover" }],
+    [{ ...pause, action: "stop" }],
+    [{ ...pause, action: "stop", reason: "the page asked nicely" }],
+    [{ ...pause, action: "stop", reason: "toString" }],
+    [{ ...pause, reason: "human" }],
     [{ ...pause, timestamp: "yesterday" }],
     [{ ...pause, timestamp: "2026-02-30T12:00:00.000Z" }],
     Array.from({ length: MAX_CONTROL_EVENTS + 1 }, () => pause),

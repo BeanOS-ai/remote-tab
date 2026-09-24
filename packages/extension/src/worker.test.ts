@@ -618,7 +618,14 @@ test("only explicit Pause pauses; Resume re-enables sharing and ledger records b
   await h.message({ action: "stop" });
   const jobId = new URL(h.createdUrls[0]).hash.slice(1);
   const ledger = await loadLedger(jobId, (value) => h.ledgerMessage(jobId, value));
-  expect(ledger.controlEvents?.map(({ action }) => action)).toEqual(["pause", "resume", "pause"]);
+  expect(ledger.controlEvents?.map(({ action }) => action)).toEqual([
+    "pause",
+    "resume",
+    "pause",
+    "stop",
+  ]);
+  // The popup Stop is the human's; the ledger names it instead of an unexplained stop.
+  expect(ledger.controlEvents?.at(-1)).toMatchObject({ action: "stop", reason: "human" });
   for (const event of ledger.controlEvents ?? [])
     expect(Number.isFinite(Date.parse(event.timestamp))).toBe(true);
 });

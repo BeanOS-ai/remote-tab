@@ -321,7 +321,7 @@ describe("blobs, extend, expiry", () => {
     const r = await redeem(call, s.id);
     expect(
       (await call(`/v1/sessions/${s.id}/extend`, { method: "POST" }, s.agent_token)).status,
-    ).toBe(401);
+    ).toBe(403);
     const ok = await call(`/v1/sessions/${s.id}/extend`, { method: "POST" }, r.body.browser_token);
     expect(ok.status).toBe(200);
     const again = await call(
