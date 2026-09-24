@@ -618,8 +618,10 @@ try {
     assert.deepEqual(exported.status, history.status);
     assert.deepEqual(
       exported.controlEvents.map((event) => event.action),
-      ["pause", "resume"],
+      ["pause", "resume", "stop"],
     );
+    // The popup Stop ended this share; the export names why it stopped.
+    assert.equal(exported.controlEvents[2].reason, "human");
     const controlTimestamps = exported.controlEvents.map((event) => Date.parse(event.timestamp));
     assert.ok(controlTimestamps.every(Number.isFinite));
     assert.ok(controlTimestamps[1] >= controlTimestamps[0]);
@@ -628,6 +630,7 @@ try {
     const controlsText = await localControls.innerText();
     assert.match(controlsText, /Human paused sharing/);
     assert.match(controlsText, /Human resumed sharing/);
+    assert.match(controlsText, /Sharing stopped: You clicked Stop/);
     assert.match(controlsText, /not part of the authenticated command chain/);
     for (const event of exported.controlEvents) assert.ok(controlsText.includes(event.timestamp));
     assert.deepEqual(
