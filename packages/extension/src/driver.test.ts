@@ -1,6 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { Mode } from "@remote-tab/protocol";
-import { type Cdp, type DriverOptions, type DriverResult, TabDriver, isActing } from "./driver";
+import {
+  type Cdp,
+  type DriverOptions,
+  type DriverResult,
+  SCREENSHOT_UNAVAILABLE,
+  TabDriver,
+  isActing,
+} from "./driver";
 
 const ax = (id: number, name = `Element ${id}`, extra = {}) => ({
   nodeId: String(id),
@@ -544,4 +551,46 @@ test("browser_evaluate runs in the isolated world, not the page's main world", a
   // ignored and land back in the main world, so assert the exact key.
   expect(evaluate?.params.contextId).toBe(42);
   expect(f.count("Page.createIsolatedWorld")).toBeGreaterThan(0);
+});
+
+describe("background tab screenshots", () => {
+  // Chrome may never draw a tab that is not in front, so Page.captureScreenshot hangs.
+  const hidden = (f: ReturnType<typeof fixture>) => {
+    f.state.hook = (method) =>
+      method === "Page.captureScreenshot"
+        ? new Promise<never>(() => {})
+        : Promise.resolve(undefined);
+  };
+  test("browser_take_screenshot fails with screenshot_unavailable instead of hanging", async () => {
+    const f = fixture({ mode: "act", screenshotTimeoutMs: 20 });
+    await f.driver.initialize();
+    await f.driver.execute("browser_snapshot");
+    hidden(f);
+    await expect(f.driver.execute("browser_take_screenshot")).rejects.toMatchObject({
+      code: "screenshot_unavailable",
+      message: SCREENSHOT_UNAVAILABLE,
+    });
+  });
+  test("an action still returns its result, without a screenshot, and tells the human", async () => {
+    const f = fixture({ mode: "act", screenshotTimeoutMs: 20 });
+    await f.driver.initialize();
+    await f.driver.execute("browser_snapshot");
+    hidden(f);
+    const output = await f.driver.execute("browser_click", { ref: "e2" });
+    expect(output.screenshot).toBeUndefined();
+    expect(f.count("Input.dispatchMouseEvent")).toBeGreaterThan(0);
+    expect(f.notices.at(-1)?.code).toBe("screenshot_unavailable");
+  });
+  test("the next capture works once Chrome draws the tab again", async () => {
+    const f = fixture({ mode: "act", screenshotTimeoutMs: 20 });
+    await f.driver.initialize();
+    await f.driver.execute("browser_snapshot");
+    hidden(f);
+    await expect(f.driver.execute("browser_take_screenshot")).rejects.toMatchObject({
+      code: "screenshot_unavailable",
+    });
+    f.state.hook = undefined;
+    const output = await f.driver.execute("browser_take_screenshot");
+    expect(output.screenshot).toEqual(new TextEncoder().encode("png"));
+  });
 });

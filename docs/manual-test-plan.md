@@ -151,7 +151,10 @@ inspect that result even if the CLI process itself exits successfully.
 
 Open a second, visibly different tab in profile A and make it active. Without
 interacting with the shared fixture, request another screenshot and snapshot.
-They must still depict the original shared tab. Open the popup: its shared title
+The snapshot must still depict the original shared tab. Chrome may not draw a
+tab that is not in front: the screenshot must either depict the shared tab or
+return `screenshot_unavailable` within about 15 seconds. It must never hang or
+hold up the next command. Open the popup: its shared title
 and origin must still identify that tab, with **Go to shared tab** visible. Click
 it and confirm the shared tab becomes active. Repeat from another window and
 confirm the shared window receives focus. On the shared tab itself, the button
