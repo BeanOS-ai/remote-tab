@@ -240,7 +240,25 @@ export class TabDriver {
     }
     if (method === "Fetch.requestPaused") {
       const url = str(rec(params.request).url, 10000);
-      if (params.resourceType === "Document" && !isWithinScope(url, this.options.scope)) {
+      // Chrome always names the requesting frame. A document for an embedded
+      // frame is still blocked out of scope, but it is not the shared tab
+      // leaving the site, so it must not turn the acting command into a
+      // failure while the top-level page loads in scope.
+      const subframe = typeof params.frameId === "string" && params.frameId !== this.frameId;
+      if (
+        params.resourceType === "Document" &&
+        subframe &&
+        !isWithinScope(url, this.options.scope)
+      ) {
+        await this.send("Fetch.failRequest", {
+          requestId: params.requestId,
+          errorReason: "BlockedByClient",
+        });
+        this.options.onNotice?.({
+          code: "subframe_blocked",
+          message: "Blocked embedded content from outside the shared site",
+        });
+      } else if (params.resourceType === "Document" && !isWithinScope(url, this.options.scope)) {
         const denied = new DriverError(
           "scope_denied",
           "Blocked navigation outside the shared site scope",

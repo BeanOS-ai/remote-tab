@@ -139,7 +139,7 @@ checkout with Bun, Python 3, and workspace dependencies installed:
 
 ```sh
 REMOTE_TAB_SERVER_ORIGIN=https://tabs.example.org \
-  packages/extension/package-store.sh /tmp/remote-tab-2.2.2.zip
+  packages/extension/package-store.sh /tmp/remote-tab-2.2.3.zip
 ```
 
 The release packager requires an explicit HTTPS origin and rejects the default

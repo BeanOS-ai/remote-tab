@@ -272,6 +272,59 @@ describe("CDP driver", () => {
       f.driver.execute("browser_navigate", { url: "https://example.co.uk/go" }),
     ).rejects.toMatchObject({ code: "scope_denied" });
   });
+  test("an out-of-scope embedded frame is blocked without failing an in-scope navigation", async () => {
+    const f = fixture();
+    await f.driver.initialize();
+    f.state.hook = async (method) => {
+      if (method !== "Page.navigate") return undefined;
+      setTimeout(() => {
+        void f.driver
+          .onEvent("Fetch.requestPaused", {
+            requestId: "widget",
+            frameId: "child-frame",
+            resourceType: "Document",
+            request: { url: "https://widgets.other-site.net/embed" },
+          })
+          .then(() =>
+            f.driver.onEvent("Page.frameNavigated", {
+              frame: { id: "f1", url: "https://sub.example.co.uk/projects/" },
+            }),
+          )
+          .then(() =>
+            f.driver.onEvent("Page.lifecycleEvent", {
+              frameId: "f1",
+              loaderId: "l1",
+              name: "load",
+            }),
+          );
+      }, 1);
+      return { loaderId: "l1" };
+    };
+    await f.driver.execute("browser_navigate", { url: "https://sub.example.co.uk/projects/" });
+    expect(f.count("Fetch.failRequest")).toBe(1);
+    expect(f.notices.map((notice) => notice.code)).toEqual(["subframe_blocked"]);
+    expect(result(await f.driver.execute("browser_snapshot")).url).toBe(
+      "https://sub.example.co.uk/projects/",
+    );
+  });
+  test("an out-of-scope request from the main frame still fails the acting command", async () => {
+    const f = fixture();
+    await f.driver.initialize();
+    f.state.hook = async (method) => {
+      if (method === "Page.captureScreenshot")
+        await f.driver.onEvent("Fetch.requestPaused", {
+          requestId: "top",
+          frameId: "f1",
+          resourceType: "Document",
+          request: { url: "https://attacker.co.uk" },
+        });
+      return undefined;
+    };
+    await expect(
+      f.driver.execute("browser_navigate", { url: "https://example.co.uk/go" }),
+    ).rejects.toMatchObject({ code: "scope_denied" });
+    expect(f.notices[0].code).toBe("scope_denied");
+  });
   test("navigation awaits matching load before screenshot and retains redirect destination", async () => {
     const f = fixture();
     await f.driver.initialize();
