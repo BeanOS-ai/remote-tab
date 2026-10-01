@@ -389,7 +389,7 @@ packaging rejects the default placeholder. The root manifest and runtime,
 local icons, MIT license, and corresponding PSL data/license notices form an
 explicit allowlist. No test files, source maps, credentials, or deployment
 configuration enter the archive. Version is read from the extension package
-(2.2.2); the display name is **Remote Tab** and the ZIP basename is
+(2.2.3); the display name is **Remote Tab** and the ZIP basename is
 `remote-tab-{version}.zip`. This rename does not update the public listing or
 the separate legacy Bean Tab Share tool.
 Packaging does not upload or publish the extension.
@@ -421,7 +421,11 @@ Behaviour:
   IP addresses and local hosts are compared exactly. CDP Fetch interception
   blocks out-of-scope document requests, including redirects and link navigation.
   Only HTTP(S) tabs may be shared. A navigation outside scope is blocked,
-  reported to the agent as `scope_denied`, and shown to the human.
+  reported to the agent as `scope_denied`, and shown to the human. An
+  out-of-scope document for an embedded frame (a third-party widget or tracker
+  iframe) is also blocked, but it is not the shared tab leaving the site: the
+  acting command keeps its real outcome and the popup notes the blocked
+  embedded content.
 - **Explicit Pause / Resume.** Only the installed popup's Pause control pauses
   browser commands. Moving, clicking, typing, scrolling, or navigating in the
   shared tab does not automatically pause; work in other tabs is unaffected.
