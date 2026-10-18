@@ -66,6 +66,41 @@ function harness(options: { anonymousQps?: number; qps?: number; usageSink?: Usa
   };
 }
 
+test("create reports only the resolved diagnostic tier for anonymous and HTTP-resolved keys", async () => {
+  for (const tier of [undefined, "verified", "unverified", "internal"]) {
+    const h = harness({ anonymousQps: 10 });
+    if (tier) h.setClaims({ subject: "private-account", tier, qps: 0 });
+    const response = await h.call("/v1/sessions", tier ? rawKey : undefined, "POST", {
+      id: crypto.randomUUID().replaceAll("-", ""),
+      tier: "keyed:spoofed",
+    });
+    expect(response.status).toBe(201);
+    const session = await response.json();
+    expect(session.tier).toBe(tier ? `keyed:${tier}` : "anonymous");
+    expect(Object.keys(session).sort()).toEqual([
+      "agent_token",
+      "expires_at",
+      "id",
+      "redeem_until",
+      "tier",
+    ]);
+    for (const privateValue of [rawKey, await hashKey(rawKey), "private-account"])
+      expect(JSON.stringify(session)).not.toContain(privateValue);
+    expect(h.requests).toHaveLength(tier ? 1 : 0);
+    expect((await h.store.getSession(session.id))?.keyBinding === undefined).toBe(!tier);
+  }
+});
+
+test("a requested tier cannot bypass disabled anonymous access", async () => {
+  const h = harness();
+  const response = await h.call("/v1/sessions", undefined, "POST", {
+    id: crypto.randomUUID().replaceAll("-", ""),
+    tier: "keyed:internal",
+  });
+  expect(response.status).toBe(401);
+  expect((await response.json()).tier).toBeUndefined();
+});
+
 test("keyed sessions retain only fingerprints and pair without platform credentials when anonymous is disabled", async () => {
   const h = harness();
   const created = await h.create();

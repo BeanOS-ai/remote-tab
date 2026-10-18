@@ -74,6 +74,8 @@ export interface CreateSessionResponse {
   agent_token: string;
   expires_at: string;
   redeem_until: string;
+  /** Creation-time diagnostic: anonymous or keyed:<resolved tier>. Not authorization. */
+  tier?: string;
 }
 export interface RedeemResponse {
   browser_token: string;

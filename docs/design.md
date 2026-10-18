@@ -1,6 +1,6 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-24
+last_updated: 2026-10-18
 last_reviewed: 2026-09-23
 ---
 
@@ -168,7 +168,7 @@ serves no pages (§5.5).
 
 | Method + path | Who | Purpose |
 |---|---|---|
-| `POST /v1/sessions` | agent (optional API key) | create; `{id, ttl_seconds?}` → `{id, agent_token, expires_at, redeem_until}` |
+| `POST /v1/sessions` | agent (optional API key) | create; `{id, ttl_seconds?}` → `{id, agent_token, expires_at, redeem_until, tier?}` |
 | `POST /v1/sessions/{id}/redeem` | browser (no token) | one-shot → `{browser_token, expires_at}` |
 | `POST /v1/sessions/{id}/messages` | agent or browser | append `{role, prev_hash, nonce, ciphertext}` → `{seq, hash}` |
 | `GET /v1/sessions/{id}/messages?after={seq}&wait=25` | agent or browser | long-poll up to 25 s; returns messages after `seq` |
@@ -512,7 +512,11 @@ The M2 Bun CLI accepts tool arguments as a JSON object and shares the same
 client implementation. `create` saves only the session connection state in
 a private local file (0600 inside a 0700 directory), refuses overwrite, and
 prints the code with the private-delivery warning. Later commands resume
-that file; the platform API key is not saved. Ledger export verifies and
+that file; the platform API key is not saved. The optional `tier` field in the
+create response, connection state, and CLI create output is a diagnostic
+snapshot (`anonymous` or `keyed:<resolved tier>`), never authorization; older
+servers/state may omit it. See [the wire contract](agent-api.md).
+Ledger export verifies and
 decrypts everything before creating a new output directory. The CLI
 `ledger render --out {file.gif|webm}` command currently reports that rendering
 is available in the installed extension interaction summary page; CLI rendering itself remains unimplemented.

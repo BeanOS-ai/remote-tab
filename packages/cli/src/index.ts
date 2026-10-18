@@ -256,7 +256,8 @@ export async function execute(
         ttl: args.ttl,
         ...options,
       });
-      await reservation.writeFile(`${JSON.stringify(session.exportState())}\n`);
+      const state = session.exportState();
+      await reservation.writeFile(`${JSON.stringify(state)}\n`);
       await reservation.sync();
       return {
         code,
@@ -264,6 +265,7 @@ export async function execute(
         redeem:
           "Use this code within 10 minutes, before the session expires. Each code works once.",
         state: statePath,
+        ...(state.tier !== undefined && { tier: state.tier }),
       };
     } catch (error) {
       await rm(statePath, { force: true });

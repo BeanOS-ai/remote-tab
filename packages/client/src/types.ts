@@ -47,6 +47,8 @@ export interface AgentConnectionState {
   sessionId: string;
   secret: string;
   agentToken: string;
+  /** Creation-time diagnostic from the server; may be absent on older servers/state. */
+  tier?: string;
 }
 export interface Hello {
   mode: Mode;
