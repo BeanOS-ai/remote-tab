@@ -77,6 +77,27 @@ async function rawAppend(
 }
 
 describe("client lifecycle", () => {
+  test("tier survives export/resume as a diagnostic snapshot without granting authority", async () => {
+    const h = setup();
+    const { session } = await createSession({ serverUrl, apiKey, fetch: h.fetch });
+    const state = JSON.parse(JSON.stringify(session.exportState()));
+    expect(state.tier).toBe("keyed:static");
+    const resumed = AgentSession.resume(state, { fetch: h.fetch });
+    expect(resumed.exportState().tier).toBe("keyed:static");
+    expect(await resumed.status()).toMatchObject({ state: "created" });
+    const forged = AgentSession.resume(
+      { ...state, tier: "keyed:internal", agentToken: "not-a-session-token" },
+      { fetch: h.fetch },
+    );
+    await expect(forged.status()).rejects.toMatchObject({ code: "unauthorized" });
+
+    // State written before tier was added still authenticates normally.
+    const { tier: _tier, ...legacyState } = state;
+    const legacy = AgentSession.resume(legacyState, { fetch: h.fetch });
+    expect(legacy.exportState().tier).toBeUndefined();
+    expect(await legacy.status()).toMatchObject({ state: "created" });
+  });
+
   test("status details recover authenticated consent after resume and stop without waiting or fetching blobs", async () => {
     const h = setup();
     const opts = { fetch: h.fetch, ...quick };

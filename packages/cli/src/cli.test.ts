@@ -159,16 +159,19 @@ test("state reserved privately before create; bad paths, flags and overwrites ca
     expect(created.json.warning).toBe(PRIVATE_DELIVERY_WARNING);
     expect(created.json.redeem).toContain("within 10 minutes");
     expect(created.json.state).toBe(state);
+    expect(created.json.tier).toBe("keyed:static");
     expect((await stat(state)).mode & 0o777).toBe(0o600);
     expect((await stat(join(root, "private"))).mode & 0o777).toBe(0o700);
     const saved = await readFile(state, "utf8");
     expect(JSON.parse(saved).sessionId).toMatch(/^[a-f0-9]{32}$/);
+    expect(JSON.parse(saved).tier).toBe("keyed:static");
     expect(saved).not.toContain(apiKey);
     expect(Object.keys(JSON.parse(saved)).sort()).toEqual([
       "agentToken",
       "secret",
       "serverUrl",
       "sessionId",
+      "tier",
       "v",
     ]);
     expect(created.stdout).not.toContain(JSON.parse(saved).agentToken);

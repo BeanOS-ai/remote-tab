@@ -1,6 +1,6 @@
 ---
 created: 2026-09-18
-last_updated: 2026-09-24
+last_updated: 2026-10-18
 last_reviewed: 2026-09-23
 ---
 
@@ -110,8 +110,17 @@ Add the platform bearer header only when the operator requires a key.
 
 201:
 ```json
-{"id":"7087407e1b71d177d2899a4cb6c7fb0b","agent_token":"{agent-token}","expires_at":"2030-01-01T00:30:00.000Z","redeem_until":"2030-01-01T00:10:00.000Z"}
+{"id":"7087407e1b71d177d2899a4cb6c7fb0b","agent_token":"{agent-token}","expires_at":"2030-01-01T00:30:00.000Z","redeem_until":"2030-01-01T00:10:00.000Z","tier":"anonymous"}
 ```
+
+`tier` is a non-secret creation-time diagnostic: `anonymous` or
+`keyed:<resolved tier>` (for example `keyed:verified`, `keyed:unverified`,
+`keyed:internal`, or `keyed:static`). The client preserves it in exported
+connection state, and CLI `create` includes it in its JSON output. Older
+servers and saved state may omit it; clients do not infer it from a key.
+It is a snapshot, not an authorization claim or a live policy lookup. Key
+revocation and tier/QPS changes still take effect through the server's resolver.
+The label includes no key, fingerprint, key id, or subject.
 
 The human extension sends only the id, never the secret (no auth required):
 ```http
