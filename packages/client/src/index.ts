@@ -56,6 +56,7 @@ export async function createSession(
     sessionId,
     secret,
     agentToken: created.agent_token,
+    ...(typeof created.tier === "string" && { tier: created.tier }),
   };
   return { code: formatCode(secret), session: AgentSession.resume(state, options) };
 }

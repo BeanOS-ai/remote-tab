@@ -306,6 +306,7 @@ export function createApp(opts: AppOptions): {
         agent_token: agentToken,
         expires_at: record.expiresAt,
         redeem_until: record.redeemUntil,
+        tier: ctx.binding ? `keyed:${ctx.identity.tier}` : "anonymous",
       };
       recordUsage(ctx, "session_created", 1);
       return json(201, res);
