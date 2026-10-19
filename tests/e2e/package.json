@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.31.0",
     "@remote-tab/cli": "workspace:*",
     "@remote-tab/client": "workspace:*",
     "@remote-tab/mcp": "workspace:*",
