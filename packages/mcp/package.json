@@ -7,6 +7,6 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.31.0",
     "@remote-tab/client": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   }
 }
